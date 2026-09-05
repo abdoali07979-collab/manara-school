@@ -4,58 +4,39 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#0e3558" />
-  <meta name="description" content="الصفحة الرسمية لتحميل تطبيق مدرسة المنارة على أجهزة أندرويد." />
-  <title>تحميل تطبيق مدرسة المنارة</title>
+  <meta name="description" content="الصفحة الرسمية لتطبيق مدرسة المنارة على أندرويد وآيفون." />
+  <title>تطبيق مدرسة المنارة</title>
   <link rel="icon" href="logo.jpg" />
   <style>
-    :root{--navy:#0e3558;--navy2:#09243d;--gold:#d7aa45;--paper:#f7f4ec;--ink:#173047;--muted:#667789}
-    *{box-sizing:border-box}
-    html{scroll-behavior:smooth}
+    :root{--navy:#0e3558;--navy2:#09243d;--gold:#d7aa45;--paper:#f7f4ec;--ink:#173047;--muted:#667789;--green:#0b6b3a}
+    *{box-sizing:border-box} html{scroll-behavior:smooth}
     body{margin:0;font-family:Tahoma,Arial,"Segoe UI",sans-serif;background:linear-gradient(145deg,#f8fafc 0%,#eef3f7 52%,#fbf7ed 100%);color:var(--ink);min-height:100vh}
     .page{min-height:100vh;display:grid;place-items:center;padding:34px 18px;position:relative;overflow:hidden}
-    .page:before,.page:after{content:"";position:absolute;border-radius:50%;filter:blur(2px);opacity:.18;pointer-events:none}
-    .page:before{width:420px;height:420px;background:var(--gold);top:-210px;left:-130px}
-    .page:after{width:520px;height:520px;background:var(--navy);bottom:-310px;right:-180px}
-    .card{width:min(760px,100%);background:rgba(255,255,255,.94);border:1px solid rgba(14,53,88,.12);box-shadow:0 24px 70px rgba(14,53,88,.16);border-radius:30px;padding:34px;position:relative;z-index:1;text-align:center;backdrop-filter:blur(10px)}
-    .topline{width:72px;height:5px;border-radius:999px;background:linear-gradient(90deg,var(--gold),#f0cf7d);margin:0 auto 24px}
-    .logo-wrap{width:132px;height:132px;margin:0 auto 20px;border-radius:30px;padding:8px;background:#fff;box-shadow:0 10px 28px rgba(14,53,88,.14);border:1px solid #e7edf2}
-    .logo-wrap img{width:100%;height:100%;object-fit:cover;border-radius:22px}
-    .eyebrow{display:inline-flex;align-items:center;gap:8px;padding:8px 13px;border-radius:999px;background:#eef5fa;color:var(--navy);font-weight:700;font-size:14px;margin-bottom:14px}
-    h1{margin:0;color:var(--navy2);font-size:clamp(28px,5vw,44px);line-height:1.25}
-    .sub{margin:13px auto 0;max-width:590px;color:var(--muted);font-size:17px;line-height:1.9}
-    .download{display:inline-flex;align-items:center;justify-content:center;gap:11px;margin-top:26px;padding:17px 30px;min-width:min(330px,100%);border-radius:16px;background:linear-gradient(135deg,var(--navy),#15517f);color:#fff;text-decoration:none;font-size:20px;font-weight:800;box-shadow:0 12px 28px rgba(14,53,88,.24);transition:.2s ease}
-    .download:hover{transform:translateY(-2px);box-shadow:0 16px 34px rgba(14,53,88,.28)}
-    .download svg{width:24px;height:24px;fill:currentColor}
-    .meta{margin-top:16px;color:#738393;font-size:14px}
-    .features{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:28px}
-    .feature{background:#f8fafc;border:1px solid #e8eef3;border-radius:17px;padding:15px 10px}
-    .feature b{display:block;color:var(--navy);margin-bottom:5px;font-size:15px}.feature span{font-size:13px;color:var(--muted)}
-    .note{margin-top:22px;padding:14px 16px;border-radius:14px;background:#fff9ea;border:1px solid #f0dfb2;color:#70581e;font-size:14px;line-height:1.8;text-align:right}
-    footer{margin-top:24px;color:#8996a3;font-size:13px}
-    @media(max-width:620px){.card{padding:27px 18px;border-radius:24px}.features{grid-template-columns:1fr}.logo-wrap{width:116px;height:116px}.sub{font-size:15px}.download{font-size:18px}}
+    .page:before,.page:after{content:"";position:absolute;border-radius:50%;filter:blur(2px);opacity:.18;pointer-events:none}.page:before{width:420px;height:420px;background:var(--gold);top:-210px;left:-130px}.page:after{width:520px;height:520px;background:var(--navy);bottom:-310px;right:-180px}
+    .card{width:min(780px,100%);background:rgba(255,255,255,.94);border:1px solid rgba(14,53,88,.12);box-shadow:0 24px 70px rgba(14,53,88,.16);border-radius:30px;padding:34px;position:relative;z-index:1;text-align:center;backdrop-filter:blur(10px)}
+    .topline{width:72px;height:5px;border-radius:999px;background:linear-gradient(90deg,var(--gold),#f0cf7d);margin:0 auto 24px}.logo-wrap{width:132px;height:132px;margin:0 auto 20px;border-radius:30px;padding:8px;background:#fff;box-shadow:0 10px 28px rgba(14,53,88,.14);border:1px solid #e7edf2}.logo-wrap img{width:100%;height:100%;object-fit:cover;border-radius:22px}
+    .eyebrow{display:inline-flex;align-items:center;gap:8px;padding:8px 13px;border-radius:999px;background:#eef5fa;color:var(--navy);font-weight:700;font-size:14px;margin-bottom:14px}h1{margin:0;color:var(--navy2);font-size:clamp(28px,5vw,44px);line-height:1.25}.sub{margin:13px auto 0;max-width:610px;color:var(--muted);font-size:17px;line-height:1.9}
+    .buttons{display:grid;grid-template-columns:1fr 1fr;gap:13px;margin:26px auto 0;max-width:650px}.download{display:flex;align-items:center;justify-content:center;gap:10px;padding:17px 20px;border-radius:16px;color:#fff;text-decoration:none;font-size:18px;font-weight:800;box-shadow:0 12px 28px rgba(14,53,88,.20);transition:.2s ease}.download:hover{transform:translateY(-2px)}.android{background:linear-gradient(135deg,var(--navy),#15517f)}.ios{background:linear-gradient(135deg,var(--green),#14925b)}
+    .features{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:28px}.feature{background:#f8fafc;border:1px solid #e8eef3;border-radius:17px;padding:15px 10px}.feature b{display:block;color:var(--navy);margin-bottom:5px;font-size:15px}.feature span{font-size:13px;color:var(--muted)}
+    .notes{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:22px;text-align:right}.note{padding:14px 16px;border-radius:14px;font-size:14px;line-height:1.8}.note.android-note{background:#eef5fa;border:1px solid #d8e8f3;color:#31526b}.note.ios-note{background:#edf8f2;border:1px solid #d5ebdf;color:#285b42}footer{margin-top:24px;color:#8996a3;font-size:13px}
+    @media(max-width:620px){.card{padding:27px 18px;border-radius:24px}.buttons,.features,.notes{grid-template-columns:1fr}.logo-wrap{width:116px;height:116px}.sub{font-size:15px}.download{font-size:17px}}
   </style>
 </head>
 <body>
-  <main class="page">
-    <section class="card">
-      <div class="topline"></div>
-      <div class="logo-wrap"><img src="logo.jpg" alt="شعار مدرسة المنارة" /></div>
-      <div class="eyebrow">تطبيق أندرويد • APK</div>
-      <h1>تطبيق مدرسة المنارة</h1>
-      <p class="sub">حمّل تطبيق مدرسة المنارة للوصول إلى معلومات الطالب، الحضور والغياب، والنتائج والخدمات المدرسية بسهولة من هاتفك.</p>
-      <a class="download" href="almanara-school.apk" download>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20h14v-2H5v2zm14-9h-4V3H9v8H5l7 7 7-7z"/></svg>
-        تحميل التطبيق APK
-      </a>
-      <div class="meta">حجم الملف: حوالي 4.2 MB</div>
-      <div class="features">
-        <div class="feature"><b>سهل الاستخدام</b><span>واجهة واضحة لأولياء الأمور</span></div>
-        <div class="feature"><b>معلومات الطالب</b><span>الوصول إلى البيانات المدرسية</span></div>
-        <div class="feature"><b>أندرويد</b><span>تحميل مباشر بصيغة APK</span></div>
-      </div>
-      <div class="note">بعد الضغط على زر التحميل قد يطلب أندرويد السماح بتثبيت التطبيقات من هذا المصدر، لأن التطبيق يتم تحميله مباشرة وليس من متجر Google Play.</div>
-      <footer>مدرسة المنارة © 2026</footer>
-    </section>
-  </main>
+  <main class="page"><section class="card">
+    <div class="topline"></div><div class="logo-wrap"><img src="logo.jpg" alt="شعار مدرسة المنارة" /></div>
+    <div class="eyebrow">Android & iPhone</div><h1>تطبيق مدرسة المنارة</h1>
+    <p class="sub">اختر نوع جهازك للوصول إلى تطبيق مدرسة المنارة ومتابعة معلومات الطالب والحضور والغياب والنتائج بسهولة.</p>
+    <div class="buttons">
+      <a class="download android" href="almanara-school.apk" download>🤖 تحميل للأندرويد APK</a>
+      <a class="download ios" href="ios-app.html"> فتح نسخة iPhone</a>
+    </div>
+    <div class="features"><div class="feature"><b>ملف الطالب</b><span>الدخول باستخدام كود الطالب</span></div><div class="feature"><b>متابعة مدرسية</b><span>الحضور والغياب والنتائج</span></div><div class="feature"><b>Android + iPhone</b><span>نفس البيانات على الجهازين</span></div></div>
+    <div class="notes">
+      <div class="note android-note"><b>أندرويد:</b> اضغط زر التحميل، ثم افتح ملف APK وأكمل التثبيت.</div>
+      <div class="note ios-note"><b>آيفون:</b> اضغط «فتح نسخة iPhone»، ثم من Safari اضغط مشاركة ⬆️ ← «إضافة إلى الشاشة الرئيسية» ← «إضافة».</div>
+    </div>
+    <footer>مدرسة المنارة © 2026</footer>
+  </section></main>
 </body>
 </html>
