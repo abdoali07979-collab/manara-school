@@ -4,6 +4,7 @@ const DEMO_KEY = 'almanara_v4_demo_data';
 const DEMO_SESSION = 'almanara_v4_session';
 const LOGIN_EMAIL_KEY = 'almanara_login_email';
 const LOGIN_REMEMBER_KEY = 'almanara_login_remember';
+const PUBLIC_PARENT_PORTAL_URL = 'https://abdoali07979-collab.github.io/manara-school/';
 let sb = null;
 let state = { screen:'parent', user:null, role:null, tab:'home', portal:null, data:null, sidebar:false, loginNotice:'', portalPoll:null };
 
@@ -18,6 +19,75 @@ function today(){return new Date().toISOString().slice(0,10);}
 function logo(){return `<img src="assets/logo.jpg" alt="شعار مدرسة المنارة">`;}
 function moneyLike(n){return Number(n||0).toLocaleString('ar');}
 function statusBadge(s){const cls=s==='حاضر'?'present':s==='غائب'?'absent':'late'; return `<span class="badge ${cls}">${esc(s)}</span>`;}
+
+function normalizeStudentCode(raw=''){
+  let v=String(raw||'').trim();
+  try{
+    const u=new URL(v);
+    v=u.searchParams.get('code')||u.searchParams.get('student_code')||v;
+  }catch(_){}
+  const upper=String(v||'').trim().toUpperCase();
+  const m=upper.match(/MN-[A-Z0-9]{4}-[A-Z0-9]{4}/);
+  return m?m[0]:upper;
+}
+function studentPortalLink(code){
+  return `${PUBLIC_PARENT_PORTAL_URL}?code=${encodeURIComponent(String(code||'').trim().toUpperCase())}`;
+}
+function studentQrImageUrl(code){
+  const payload=studentPortalLink(code);
+  return `https://quickchart.io/qr?text=${encodeURIComponent(payload)}&size=320&margin=2&ecLevel=M&dark=0b4f2c&light=ffffff`;
+}
+function scanParentQr(){
+  const msg=document.getElementById('portalMessage');
+  if(isAndroidApp() && window.ManaraAndroid && typeof window.ManaraAndroid.scanStudentQr==='function'){
+    if(msg)msg.innerHTML='<div class="message">افتح الكاميرا ووجّهها نحو QR الخاص بالطالب...</div>';
+    try{window.ManaraAndroid.scanStudentQr();}catch(e){if(msg)msg.innerHTML='<div class="message error">تعذر فتح ماسح QR.</div>';}
+    return;
+  }
+  if(msg)msg.innerHTML='<div class="message ok">على المتصفح: افتح كاميرا الهاتف العادية وامسح QR. سيفتح ملف الطالب مباشرة.</div>';
+}
+function chooseParentQrImage(){
+  const msg=document.getElementById('portalMessage');
+  if(isAndroidApp() && window.ManaraAndroid && typeof window.ManaraAndroid.chooseStudentQrImage==='function'){
+    if(msg)msg.innerHTML='<div class="message">اختر صورة QR من الاستديو...</div>';
+    try{window.ManaraAndroid.chooseStudentQrImage();}catch(e){if(msg)msg.innerHTML='<div class="message error">تعذر فتح الاستديو.</div>';}
+    return;
+  }
+  if(msg)msg.innerHTML='<div class="message error">اختيار صورة QR من الجهاز متاح حالياً داخل تطبيق Android.</div>';
+}
+window.onManaraQrScanned=function(raw){
+  const code=normalizeStudentCode(raw);
+  const input=document.getElementById('portalCode');
+  const msg=document.getElementById('portalMessage');
+  if(!code || !code.startsWith('MN-')){
+    if(msg)msg.innerHTML='<div class="message error">هذا QR ليس تابعاً لطالب في مدرسة المنارة.</div>';
+    return;
+  }
+  if(input)input.value=code;
+  findStudentPortal();
+};
+window.onManaraQrScanError=function(message){
+  const msg=document.getElementById('portalMessage');
+  if(msg)msg.innerHTML=`<div class="message error">${esc(message||'تعذر قراءة QR. حاول مرة أخرى.')}</div>`;
+};
+function showStudentQr(id){
+  const st=state.data?.students?.find(x=>x.id===id);
+  if(!st || !st.access_code)return alert('لا يوجد كود للطالب.');
+  const code=String(st.access_code).trim().toUpperCase();
+  const qr=studentQrImageUrl(code);
+  const link=studentPortalLink(code);
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="modal"><div class="modalbox" style="max-width:520px;text-align:center">
+    <div class="row between"><div style="text-align:right"><h2 class="section-title">QR الطالب</h2><div class="muted">${esc(st.full_name||'')}</div></div><button class="btn outline" onclick="closeModal()">إغلاق</button></div>
+    <div class="message ok" style="text-align:right">هذا الـ QR مبني من <b>نفس كود الطالب القديم</b> ولا ينشئ كوداً جديداً. إذا تغير الكود لاحقاً يتغير QR تلقائياً.</div>
+    <img src="${esc(qr)}" alt="QR الطالب" style="display:block;width:280px;height:280px;max-width:82vw;margin:18px auto;border:12px solid #fff;border-radius:18px;box-shadow:0 6px 24px #0002">
+    <div class="code" style="font-size:20px;margin:10px 0">${esc(code)}</div>
+    <div class="hint">يمكنك أخذ لقطة شاشة وإرسالها لولي الأمر. عند مسحها تفتح بوابة الطالب مباشرة.</div>
+    <div class="row" style="justify-content:center;margin-top:14px;flex-wrap:wrap">
+      <button class="btn secondary" onclick="navigator.clipboard?.writeText('${esc(code)}');alert('تم نسخ كود الطالب')">نسخ الكود</button>
+      <button class="btn outline" onclick="navigator.clipboard?.writeText('${esc(link)}');alert('تم نسخ رابط بوابة الطالب')">نسخ رابط الطالب</button>
+    </div>
+  </div></div>`);
+}
 
 function schoolStructureDemo(){
   const buildings=[
@@ -111,7 +181,24 @@ async function init(){
     const s=JSON.parse(localStorage.getItem(DEMO_SESSION)||'null');
     if(s){state.user=s.user;state.role=s.role;state.screen='app';}
   }
-  render();
+  const initialCode=normalizeStudentCode(new URLSearchParams(window.location.search).get('code')||'');
+  if(initialCode && initialCode.startsWith('MN-')){
+    state.screen='parent';
+    state.portal=null;
+    render();
+    setTimeout(()=>{
+      const el=document.getElementById('portalCode');
+      if(el)el.value=initialCode;
+      try{
+        if(window.location.protocol.startsWith('http')){
+          history.replaceState({},'',window.location.pathname);
+        }
+      }catch(_){}
+      findStudentPortal();
+    },120);
+  }else{
+    render();
+  }
 }
 function setupError(){return `<div class="public-page"><div class="public-shell"><div class="auth-card"><h2>إعداد قاعدة البيانات غير مكتمل</h2><p>ضع SUPABASE_URL و SUPABASE_ANON_KEY داخل <b>config.js</b> أو أعد DEMO_MODE إلى true.</p></div></div></div>`;}
 
@@ -185,7 +272,7 @@ function parentPage(){
     <div class="public-header">${brandLockup()}<button class="btn outline" onclick="goLogin()">دخول الإدارة / المدرسين</button></div>
     <div class="portal-grid">
       <section class="portal-hero">${logo()}<h1>بوابة ولي الأمر</h1><p>تابع حضور الطالب وغيابه وتأخيره ونتائجه وإعلانات المدرسة باستخدام الكود الخاص بالطالب.</p><div class="hint" style="color:#bcd4c5">الكود خاص بالطالب ولا يمنح صلاحية تعديل أي بيانات.</div></section>
-      <section class="auth-card"><h2>عرض ملف الطالب</h2><p class="muted">أدخل كود الطالب كما استلمته من الإدارة.</p><div class="field"><label>كود الطالب</label><input id="portalCode" autocomplete="off" placeholder="MN-ABCD-2345" onkeydown="if(event.key==='Enter') findStudentPortal()"></div><button class="btn" onclick="findStudentPortal()">عرض الملف</button><div id="portalMessage"></div></section>
+      <section class="auth-card"><h2>عرض ملف الطالب</h2><p class="muted">اختر الطريقة الأسهل للدخول: اكتب كود الطالب أو امسح QR الخاص به.</p><div class="field"><label>كود الطالب</label><input id="portalCode" autocomplete="off" placeholder="MN-ABCD-2345" onkeydown="if(event.key==='Enter') findStudentPortal()"></div><div class="row" style="gap:10px;flex-wrap:wrap"><button class="btn" onclick="findStudentPortal()">عرض الملف</button><button class="btn secondary" onclick="scanParentQr()">📷 مسح QR</button><button class="btn secondary" onclick="chooseParentQrImage()">🖼️ اختيار صورة QR</button></div><div class="hint" style="margin-top:10px">QR يستخدم نفس كود الطالب الحالي؛ لا يوجد كود ثانٍ أو تسجيل جديد.</div><div id="portalMessage"></div></section>
     </div>
     <div id="portalResult" class="section">${state.portal?portalHtml(state.portal):''}</div>
   </div></div>`;
@@ -379,7 +466,7 @@ function page_students(){
 function roomLocation(roomId){const r=state.data.rooms?.find(x=>x.id===roomId);if(!r)return '—';const f=state.data.floors?.find(x=>x.id===r.floor_id),b=state.data.buildings?.find(x=>x.id===f?.building_id);return `${b?.name||''} / ${f?.name||''} / ${r.name||r.code}`;}
 function studentTableHtml(q=''){
   q=q.toLowerCase(); const rows=(state.data.students||[]).filter(st=>!q||[st.full_name,st.father_name,st.grandfather_name,st.family_name,st.access_code,st.grade,st.class_name,st.building_name,st.floor_name,st.room_name,roomLocation(st.room_id)].some(v=>String(v||'').toLowerCase().includes(q)));
-  return `<div class="table-wrap"><table><thead><tr><th>الطالب</th><th>الأب</th><th>الجد</th><th>الصف</th><th>الموقع</th><th>الكود</th><th>الحالة</th><th>إجراء</th></tr></thead><tbody>${rows.map(st=>`<tr><td><b>${esc(st.full_name)}</b></td><td>${esc(st.father_name||'—')}</td><td><b>${esc(st.grandfather_name||'—')}</b></td><td>${esc(st.grade||'—')} ${st.class_name?`/ ${esc(st.class_name)}`:''}</td><td>${esc(st.location_label||roomLocation(st.room_id))}</td><td><span class="code">${esc(st.access_code||'')}</span></td><td><span class="badge ${st.active===false?'inactive':'active'}">${st.active===false?'موقوف':'فعال'}</span></td><td>${state.role==='admin'?`<div class="row"><button class="btn small secondary" onclick="openStudentModal('${st.id}')">تعديل</button><button class="btn small warning" onclick="regenerateCode('${st.id}')">كود جديد</button><button class="btn small" onclick="openNoteModal('${st.id}')">ملاحظة</button><button class="btn small danger" onclick="deleteStudent('${st.id}')">حذف</button></div>`:`<div class="row"><button class="btn small secondary" onclick="openStudentModal('${st.id}')">تعديل</button><button class="btn small" onclick="openNoteModal('${st.id}')">ملاحظة للأهل</button></div>`}</td></tr>`).join('')||'<tr><td colspan="8" class="empty">لا توجد نتائج</td></tr>'}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>الطالب</th><th>الأب</th><th>الجد</th><th>الصف</th><th>الموقع</th><th>الكود</th><th>الحالة</th><th>إجراء</th></tr></thead><tbody>${rows.map(st=>`<tr><td><b>${esc(st.full_name)}</b></td><td>${esc(st.father_name||'—')}</td><td><b>${esc(st.grandfather_name||'—')}</b></td><td>${esc(st.grade||'—')} ${st.class_name?`/ ${esc(st.class_name)}`:''}</td><td>${esc(st.location_label||roomLocation(st.room_id))}</td><td><span class="code">${esc(st.access_code||'')}</span></td><td><span class="badge ${st.active===false?'inactive':'active'}">${st.active===false?'موقوف':'فعال'}</span></td><td>${state.role==='admin'?`<div class="row"><button class="btn small secondary" onclick="openStudentModal('${st.id}')">تعديل</button><button class="btn small warning" onclick="regenerateCode('${st.id}')">كود جديد</button><button class="btn small secondary" onclick="showStudentQr('${st.id}')">QR</button><button class="btn small" onclick="openNoteModal('${st.id}')">ملاحظة</button><button class="btn small danger" onclick="deleteStudent('${st.id}')">حذف</button></div>`:`<div class="row"><button class="btn small secondary" onclick="openStudentModal('${st.id}')">تعديل</button><button class="btn small secondary" onclick="showStudentQr('${st.id}')">QR</button><button class="btn small" onclick="openNoteModal('${st.id}')">ملاحظة للأهل</button></div>`}</td></tr>`).join('')||'<tr><td colspan="8" class="empty">لا توجد نتائج</td></tr>'}</tbody></table></div>`;
 }
 function filterStudentTable(){document.getElementById('studentTable').innerHTML=studentTableHtml(document.getElementById('studentSearch').value.trim());applyMobileUi();}
 function assignedRoomIds(teacherId=state.user?.id){return (state.data.teacherAssignments||[]).filter(a=>a.teacher_id===teacherId).map(a=>a.room_id);}
@@ -431,6 +518,7 @@ function openStudentModal(id=''){
 function closeModal(){document.getElementById('modal')?.remove();}
 async function saveStudent(id=''){
   const msg=document.getElementById('modalMsg');
+  let newStudentId='';
   const full=document.getElementById('s_full').value.trim(), grand=document.getElementById('s_grand').value.trim(), grade=document.getElementById('s_grade').value.trim(), room_id=document.getElementById('s_room').value||null;
   if(!full||!grand||!grade||!room_id){msg.innerHTML='<div class="message error">اسم الطالب واسم الجد والصف والشعبة حقول إلزامية.</div>';return;}
   if(state.role==='teacher'&&!assignedRoomIds().includes(room_id)){msg.innerHTML='<div class="message error">لا يمكنك إضافة طالب إلى شعبة غير مخصصة لك.</div>';return;}
@@ -453,11 +541,12 @@ async function saveStudent(id=''){
   try{
     if(DEMO){
       const room=state.data.rooms.find(r=>r.id===room_id),f=state.data.floors.find(x=>x.id===room?.floor_id),b=state.data.buildings.find(x=>x.id===f?.building_id);Object.assign(row,{room_name:room?.name,room_code:room?.code,floor_name:f?.name,building_name:b?.name,location_label:roomLocation(room_id)});
-      if(id){Object.assign(state.data.students.find(x=>x.id===id),row);audit('تعديل','طالب',full);}else{row.id=uid();row.access_code=makeStudentCode();row.created_at=new Date().toISOString();state.data.students.unshift(row);audit('إضافة','طالب',full+' / '+row.access_code);} saveDemo();
+      if(id){Object.assign(state.data.students.find(x=>x.id===id),row);audit('تعديل','طالب',full);}else{row.id=uid();newStudentId=row.id;row.access_code=makeStudentCode();row.created_at=new Date().toISOString();state.data.students.unshift(row);audit('إضافة','طالب',full+' / '+row.access_code);} saveDemo();
     }else{
-      let res;if(id)res=await sb.from('students').update(row).eq('id',id).select().single();else{row.access_code=makeStudentCode();res=await sb.from('students').insert(row).select().single();} if(res.error)throw res.error; await loadSupabaseData();
+      let res;if(id)res=await sb.from('students').update(row).eq('id',id).select().single();else{row.access_code=makeStudentCode();res=await sb.from('students').insert(row).select().single();} if(res.error)throw res.error; if(!id)newStudentId=res.data?.id||''; await loadSupabaseData();
     }
     closeModal();render();
+    if(!id && newStudentId)setTimeout(()=>showStudentQr(newStudentId),120);
   }catch(e){msg.innerHTML=`<div class="message error">${esc(e.message)}</div>`;}
 }
 async function regenerateCode(id){if(!confirm('إنشاء كود دخول جديد؟ سيتوقف الكود القديم عن العمل.'))return; const c=makeStudentCode(); if(DEMO){const s=state.data.students.find(x=>x.id===id);s.access_code=c;audit('تغيير كود','طالب',s.full_name);saveDemo();render();}else{const {error}=await sb.from('students').update({access_code:c}).eq('id',id);if(error)return alert(error.message);await loadSupabaseData();render();} alert('الكود الجديد: '+c);}
