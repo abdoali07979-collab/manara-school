@@ -2,6 +2,8 @@ const CFG = window.ALMANARA_CONFIG || {};
 const DEMO = CFG.DEMO_MODE !== false;
 const DEMO_KEY = 'almanara_v4_demo_data';
 const DEMO_SESSION = 'almanara_v4_session';
+const LOGIN_EMAIL_KEY = 'almanara_login_email';
+const LOGIN_REMEMBER_KEY = 'almanara_login_remember';
 let sb = null;
 let state = { screen:'parent', user:null, role:null, tab:'home', portal:null, data:null, sidebar:false, loginNotice:'', portalPoll:null };
 
@@ -13,7 +15,7 @@ function makeStudentCode(){
 }
 function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));}
 function today(){return new Date().toISOString().slice(0,10);}
-function logo(){return `<img src="logo.jpg" alt="شعار مدرسة المنارة">`;}
+function logo(){return `<img src="assets/logo.jpg" alt="شعار مدرسة المنارة">`;}
 function moneyLike(n){return Number(n||0).toLocaleString('ar');}
 function statusBadge(s){const cls=s==='حاضر'?'present':s==='غائب'?'absent':'late'; return `<span class="badge ${cls}">${esc(s)}</span>`;}
 
@@ -83,7 +85,14 @@ async function init(){
       document.getElementById('app').innerHTML=`<div class="public-page"><div class="public-shell"><div class="auth-card"><h2>تعذر تشغيل التطبيق</h2><p>ملف Supabase المحلي غير موجود داخل APK. شغّل PREPARE_SUPABASE_JS.bat ثم أعد بناء التطبيق.</p></div></div></div>`;
       return;
     }
-    sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY);
+    sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY,{
+      auth:{
+        persistSession:true,
+        autoRefreshToken:true,
+        detectSessionInUrl:true,
+        storage:window.localStorage
+      }
+    });
     sb.auth.onAuthStateChange((event,session)=>{
       if(event==='PASSWORD_RECOVERY'){
         state.user=null; state.role=null; state.screen='reset';
@@ -219,7 +228,7 @@ async function enableParentNotifications(){
 }
 function notifyParentDevice(items){
   if(!items?.length || !('Notification' in window) || Notification.permission!=='granted')return;
-  const n=items[0]; try{new Notification(n.title||'مدرسة المنارة',{body:n.body||'لديك ملاحظة جديدة تخص الطالب.',icon:'logo.jpg'});}catch(e){}
+  const n=items[0]; try{new Notification(n.title||'مدرسة المنارة',{body:n.body||'لديك ملاحظة جديدة تخص الطالب.',icon:'assets/logo.jpg'});}catch(e){}
 }
 async function markPortalNotificationsSeen(){
   if(!state.portal?.student)return;
@@ -229,9 +238,18 @@ async function markPortalNotificationsSeen(){
 function loginPage(){
   const notice=state.loginNotice?`<div class="message ok">${esc(state.loginNotice)}</div>`:'';
   state.loginNotice='';
+  const savedLogin=DEMO?'admin':(localStorage.getItem(LOGIN_EMAIL_KEY)||'');
+  const rememberLogin=localStorage.getItem(LOGIN_REMEMBER_KEY)!=='0';
   return `<div class="public-page"><div class="public-shell" style="max-width:520px"><div class="auth-card" style="margin-top:6vh;text-align:center">${logo().replace('<img','<img style="width:100px;height:100px;border-radius:50%;object-fit:cover;margin-bottom:10px"')}<h2>دخول النظام</h2><p class="muted">للإدارة والمدرسين المصرح لهم فقط</p>
   ${DEMO?'<div class="role-note">تجربة: الإدارة admin / Almanara@2026 — المدرس teacher1 / Teacher@2026</div>':''}
-  ${notice}<div id="loginMsg"></div><div class="field" style="text-align:right"><label>${DEMO?'اسم المستخدم':'البريد الإلكتروني'}</label><input id="loginUser" type="${DEMO?'text':'email'}" autocomplete="username" value="${DEMO?'admin':''}"></div><div class="field" style="text-align:right"><label>كلمة المرور</label><input id="loginPass" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter') doLogin()"></div><div class="row" style="justify-content:center;gap:8px"><button class="btn" onclick="doLogin()">دخول</button><button class="btn outline" onclick="goParent()">بوابة الأهل</button></div>${!DEMO?'<button class="link-button" onclick="forgotPassword()">نسيت كلمة المرور؟</button>':''}</div></div></div>`;
+  ${notice}<div id="loginMsg"></div>
+  <div class="field" style="text-align:right"><label>${DEMO?'اسم المستخدم':'البريد الإلكتروني'}</label><input id="loginUser" type="${DEMO?'text':'email'}" autocomplete="username" value="${esc(savedLogin)}"></div>
+  <div class="field" style="text-align:right"><label>كلمة المرور</label><input id="loginPass" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter') doLogin()"></div>
+  ${!DEMO?`<label style="display:flex;align-items:center;gap:10px;justify-content:flex-start;margin:8px 0 14px;cursor:pointer;text-align:right">
+    <input id="rememberLogin" type="checkbox" ${rememberLogin?'checked':''} style="width:20px;height:20px">
+    <span><b>حفظ تسجيل الدخول على هذا الجهاز</b><br><span class="muted" style="font-size:13px">بعد أول دخول لن تحتاج لكتابة البريد وكلمة المرور كل مرة، إلا إذا ضغطت «تسجيل الخروج».</span></span>
+  </label>`:''}
+  <div class="row" style="justify-content:center;gap:8px"><button class="btn" onclick="doLogin()">دخول</button><button class="btn outline" onclick="goParent()">بوابة الأهل</button></div>${!DEMO?'<button class="link-button" onclick="forgotPassword()">نسيت كلمة المرور؟</button>':''}</div></div></div>`;
 }
 async function doLogin(){
   const u=document.getElementById('loginUser').value.trim(), p=document.getElementById('loginPass').value, msg=document.getElementById('loginMsg');
@@ -243,7 +261,16 @@ async function doLogin(){
       else{const t=state.data.teachers.find(x=>x.username===u&&x.password===p&&x.active!==false);if(!t)throw new Error('اسم المستخدم أو كلمة المرور غير صحيحة.');state.user={id:t.id,name:t.full_name,username:t.username};state.role='teacher';}
       localStorage.setItem(DEMO_SESSION,JSON.stringify({user:state.user,role:state.role}));state.screen='app';state.tab='home';audit('تسجيل دخول','الحساب',state.role);render();
     }else{
-      const {data,error}=await sb.auth.signInWithPassword({email:u,password:p}); if(error)throw error; await establishSupabaseUser(data.user); render();
+      const remember=document.getElementById('rememberLogin')?.checked!==false;
+      const {data,error}=await sb.auth.signInWithPassword({email:u,password:p}); if(error)throw error;
+      if(remember){
+        localStorage.setItem(LOGIN_EMAIL_KEY,u);
+        localStorage.setItem(LOGIN_REMEMBER_KEY,'1');
+      }else{
+        localStorage.removeItem(LOGIN_EMAIL_KEY);
+        localStorage.setItem(LOGIN_REMEMBER_KEY,'0');
+      }
+      await establishSupabaseUser(data.user); render();
     }
   }catch(e){msg.innerHTML=`<div class="message error">${esc(authErrorArabic(e.message))}</div>`;}
 }
@@ -328,7 +355,7 @@ function appPage(){
   const labels={home:'الرئيسية',buildings:'الكتل والغرف',students:'الطلاب',attendance:'الحضور والغياب',notes:'ملاحظات الطلاب',grades:'النتائج',announcements:'الإعلانات',teachers:'إدارة المدرسين',audit:'سجل العمليات',settings:'الإعدادات'};
   if(state.role==='teacher'&&!['home','students','attendance','notes'].includes(state.tab))state.tab='home';
   return `<div class="app-shell"><aside class="sidebar ${state.sidebar?'open':''}"><div class="side-brand">${logo()}<div><b>${esc(state.data?.settings?.school_name||'مدرسة المنارة الخاصة')}</b><small>MANARA PRIVATE SCHOOL</small></div><button class="drawer-close" onclick="toggleSidebar(false)" aria-label="إغلاق">×</button></div><div class="user-card"><b>${esc(state.user?.name||'')}</b><small>${state.role==='admin'?'مدير النظام — تحكم كامل':'مدرس — طلاب + حضور + ملاحظات للأهل'}</small></div><div class="side-label">القائمة الرئيسية</div><nav class="side-nav">${navItems().map(n=>`<button class="${state.tab===n[0]?'active':''}" onclick="setTab('${n[0]}')"><i class="nav-icon">${n[1]}</i>${n[2]}</button>`).join('')}</nav><div class="side-label" style="margin-top:16px">الحساب</div><nav class="side-nav"><button onclick="goParent()"><i class="nav-icon">◫</i>معاينة بوابة الأهل</button><button onclick="logout()"><i class="nav-icon">↪</i>تسجيل الخروج</button></nav></aside><div class="drawer-backdrop ${state.sidebar?'show':''}" onclick="toggleSidebar(false)"></div>
-  <main class="main"><header class="topbar"><div class="row"><button class="btn outline mobile-menu" onclick="toggleSidebar()">☰</button><div class="page-title"><b>${labels[state.tab]||''}</b><small>${state.role==='admin'?'لوحة الإدارة الرئيسية':'إدارة الطلاب والحضور والملاحظات ضمن الشعب المخصصة'}</small></div></div><img class="top-logo" src="logo.jpg" alt=""><div class="top-actions"><span class="badge ${state.role}">${state.role==='admin'?'الإدارة':'مدرس'}</span></div></header><section class="content"><img class="content-watermark" src="logo.jpg" alt="">${pageContent()}</section></main></div>`;
+  <main class="main"><header class="topbar"><div class="row"><button class="btn outline mobile-menu" onclick="toggleSidebar()">☰</button><div class="page-title"><b>${labels[state.tab]||''}</b><small>${state.role==='admin'?'لوحة الإدارة الرئيسية':'إدارة الطلاب والحضور والملاحظات ضمن الشعب المخصصة'}</small></div></div><img class="top-logo" src="assets/logo.jpg" alt=""><div class="top-actions"><span class="badge ${state.role}">${state.role==='admin'?'الإدارة':'مدرس'}</span></div></header><section class="content"><img class="content-watermark" src="assets/logo.jpg" alt="">${pageContent()}</section></main></div>`;
 }
 function setTab(t){state.tab=t;state.sidebar=false;render();}
 function pageContent(){ const fn=window[`page_${state.tab}`]; return fn?fn():'<div class="card">الصفحة غير موجودة</div>'; }
