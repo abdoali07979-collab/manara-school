@@ -16,7 +16,7 @@ function makeStudentCode(){
 }
 function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));}
 function today(){return new Date().toISOString().slice(0,10);}
-function logo(){return `<img src="assets/logo.jpg" alt="شعار مدرسة المنارة">`;}
+function logo(){return `<img src="logo.jpg" alt="شعار مدرسة المنارة">`;}
 function moneyLike(n){return Number(n||0).toLocaleString('ar');}
 function statusBadge(s){const cls=s==='حاضر'?'present':s==='غائب'?'absent':'late'; return `<span class="badge ${cls}">${esc(s)}</span>`;}
 
@@ -48,12 +48,73 @@ function scanParentQr(){
 }
 function chooseParentQrImage(){
   const msg=document.getElementById('portalMessage');
+
+  // Android app: use the native gallery/ML Kit bridge.
   if(isAndroidApp() && window.ManaraAndroid && typeof window.ManaraAndroid.chooseStudentQrImage==='function'){
     if(msg)msg.innerHTML='<div class="message">اختر صورة QR من الاستديو...</div>';
-    try{window.ManaraAndroid.chooseStudentQrImage();}catch(e){if(msg)msg.innerHTML='<div class="message error">تعذر فتح الاستديو.</div>';}
+    try{window.ManaraAndroid.chooseStudentQrImage();}catch(e){
+      if(msg)msg.innerHTML='<div class="message error">تعذر فتح الاستديو.</div>';
+    }
     return;
   }
-  if(msg)msg.innerHTML='<div class="message error">اختيار صورة QR من الجهاز متاح حالياً داخل تطبيق Android.</div>';
+
+  // Website / iPhone / browser: choose a saved QR image from the device.
+  const input=document.createElement('input');
+  input.type='file';
+  input.accept='image/*';
+  input.style.display='none';
+  document.body.appendChild(input);
+
+  input.onchange=()=>{
+    const file=input.files && input.files[0];
+    if(!file){ input.remove(); return; }
+    if(msg)msg.innerHTML='<div class="message">جاري قراءة QR من الصورة...</div>';
+
+    const reader=new FileReader();
+    reader.onload=()=>{
+      const img=new Image();
+      img.onload=()=>{
+        try{
+          const canvas=document.createElement('canvas');
+          const max=1800;
+          let w=img.naturalWidth||img.width, h=img.naturalHeight||img.height;
+          const scale=Math.min(1,max/Math.max(w,h));
+          w=Math.max(1,Math.round(w*scale));
+          h=Math.max(1,Math.round(h*scale));
+          canvas.width=w; canvas.height=h;
+          const ctx=canvas.getContext('2d',{willReadFrequently:true});
+          ctx.drawImage(img,0,0,w,h);
+          const imageData=ctx.getImageData(0,0,w,h);
+
+          if(typeof window.jsQR!=='function'){
+            throw new Error('QR_LIBRARY_MISSING');
+          }
+          const result=window.jsQR(imageData.data,w,h,{inversionAttempts:'attemptBoth'});
+          if(!result || !result.data){
+            if(msg)msg.innerHTML='<div class="message error">لم يتم العثور على QR واضح داخل الصورة. جرّب صورة أوضح.</div>';
+          }else{
+            window.onManaraQrScanned(result.data);
+          }
+        }catch(e){
+          if(msg)msg.innerHTML='<div class="message error">تعذر قراءة QR من الصورة المختارة.</div>';
+        }finally{
+          input.remove();
+        }
+      };
+      img.onerror=()=>{
+        if(msg)msg.innerHTML='<div class="message error">تعذر فتح الصورة المختارة.</div>';
+        input.remove();
+      };
+      img.src=reader.result;
+    };
+    reader.onerror=()=>{
+      if(msg)msg.innerHTML='<div class="message error">تعذر قراءة الصورة المختارة.</div>';
+      input.remove();
+    };
+    reader.readAsDataURL(file);
+  };
+
+  input.click();
 }
 window.onManaraQrScanned=function(raw){
   const code=normalizeStudentCode(raw);
@@ -315,7 +376,7 @@ async function enableParentNotifications(){
 }
 function notifyParentDevice(items){
   if(!items?.length || !('Notification' in window) || Notification.permission!=='granted')return;
-  const n=items[0]; try{new Notification(n.title||'مدرسة المنارة',{body:n.body||'لديك ملاحظة جديدة تخص الطالب.',icon:'assets/logo.jpg'});}catch(e){}
+  const n=items[0]; try{new Notification(n.title||'مدرسة المنارة',{body:n.body||'لديك ملاحظة جديدة تخص الطالب.',icon:'logo.jpg'});}catch(e){}
 }
 async function markPortalNotificationsSeen(){
   if(!state.portal?.student)return;
@@ -412,12 +473,12 @@ async function loadSupabaseData(){
       sb.from('audit_logs').select('*').order('created_at',{ascending:false}).limit(300),
       sb.from('buildings').select('*').order('code'),
       sb.from('floors').select('*').order('floor_order'),
-      sb.from('rooms').select('*').order('code'),
+      sb.from('rooms').select('*').order('room_order'),
       sb.from('student_notes').select('*').order('created_at',{ascending:false}).limit(1000),
       sb.from('parent_notifications').select('*').order('created_at',{ascending:false}).limit(1000),
       sb.from('teacher_room_assignments').select('*')
     ]);
-    const students=(st.data||[]).map(x=>({...x,room_name:x.rooms?.name,room_code:x.rooms?.code,floor_name:x.rooms?.floors?.name,building_name:x.rooms?.floors?.buildings?.name,location_label:x.rooms?`${x.rooms?.floors?.buildings?.name||''} / ${x.rooms?.floors?.name||''} / ${x.rooms?.name||''}`:''}));
+    const students=(st.data||[]).map(x=>({...x,room_name:x.rooms?.name,room_code:x.rooms?.code,floor_name:x.rooms?.floors?.name,building_name:x.rooms?.floors?.buildings?.name,location_label:x.rooms?`${x.rooms?.floors?.buildings?.name||''} / ${x.rooms?.name||''}`:''}));
     state.data={students,attendance:at.data||[],grades:(gr.data||[]).map(x=>({...x,exam_name:x.grade_items?.title,max_score:x.grade_items?.max_score,date:x.grade_items?.exam_date,subject_name:x.grade_items?.subjects?.name})),announcements:an.data||[],subjects:su.data||[],teachers:pr.data||[],settings:se.data||{},audit:au.data||[],buildings:bu.data||[],floors:fl.data||[],rooms:ro.data||[],studentNotes:sn.data||[],notifications:pn.data||[],teacherAssignments:ta.data||[]};
   }else{
     const [st,at,se,bu,fl,ro,sn,ta]=await Promise.all([
@@ -426,23 +487,23 @@ async function loadSupabaseData(){
       sb.from('school_settings').select('*').limit(1).maybeSingle(),
       sb.from('buildings').select('*').order('code'),
       sb.from('floors').select('*').order('floor_order'),
-      sb.from('rooms').select('*').order('code'),
+      sb.from('rooms').select('*').order('room_order'),
       sb.from('student_notes').select('*').order('created_at',{ascending:false}).limit(1000),
       sb.from('teacher_room_assignments').select('*').eq('teacher_id',state.user.id)
     ]);
-    const students=(st.data||[]).map(x=>({...x,room_name:x.rooms?.name,room_code:x.rooms?.code,floor_name:x.rooms?.floors?.name,building_name:x.rooms?.floors?.buildings?.name,location_label:x.rooms?`${x.rooms?.floors?.buildings?.name||''} / ${x.rooms?.floors?.name||''} / ${x.rooms?.name||''}`:''}));
+    const students=(st.data||[]).map(x=>({...x,room_name:x.rooms?.name,room_code:x.rooms?.code,floor_name:x.rooms?.floors?.name,building_name:x.rooms?.floors?.buildings?.name,location_label:x.rooms?`${x.rooms?.floors?.buildings?.name||''} / ${x.rooms?.name||''}`:''}));
     state.data={students,attendance:at.data||[],grades:[],announcements:[],subjects:[],teachers:[],settings:se.data||{},audit:[],buildings:bu.data||[],floors:fl.data||[],rooms:ro.data||[],studentNotes:sn.data||[],notifications:[],teacherAssignments:ta.data||[]};
   }
 }
 function navItems(){
   if(state.role==='teacher') return [['home','⌂','الرئيسية'],['students','♟','طلابي'],['attendance','✓','الحضور والغياب'],['notes','✎','ملاحظات الطلاب']];
-  return [['home','⌂','الرئيسية'],['buildings','▦','الكتل والغرف'],['students','♟','الطلاب'],['attendance','✓','الحضور والغياب'],['notes','✎','ملاحظات الطلاب'],['grades','▤','النتائج'],['announcements','◉','الإعلانات'],['teachers','♙','المدرسون'],['audit','≡','سجل العمليات'],['settings','⚙','الإعدادات']];
+  return [['home','⌂','الرئيسية'],['buildings','▦','الصفوف والشعب'],['students','♟','الطلاب'],['attendance','✓','الحضور والغياب'],['notes','✎','ملاحظات الطلاب'],['grades','▤','النتائج'],['announcements','◉','الإعلانات'],['teachers','♙','المدرسون'],['audit','≡','سجل العمليات'],['settings','⚙','الإعدادات']];
 }
 function appPage(){
-  const labels={home:'الرئيسية',buildings:'الكتل والغرف',students:'الطلاب',attendance:'الحضور والغياب',notes:'ملاحظات الطلاب',grades:'النتائج',announcements:'الإعلانات',teachers:'إدارة المدرسين',audit:'سجل العمليات',settings:'الإعدادات'};
+  const labels={home:'الرئيسية',buildings:'الصفوف والشعب',students:'الطلاب',attendance:'الحضور والغياب',notes:'ملاحظات الطلاب',grades:'النتائج',announcements:'الإعلانات',teachers:'إدارة المدرسين',audit:'سجل العمليات',settings:'الإعدادات'};
   if(state.role==='teacher'&&!['home','students','attendance','notes'].includes(state.tab))state.tab='home';
   return `<div class="app-shell"><aside class="sidebar ${state.sidebar?'open':''}"><div class="side-brand">${logo()}<div><b>${esc(state.data?.settings?.school_name||'مدرسة المنارة الخاصة')}</b><small>MANARA PRIVATE SCHOOL</small></div><button class="drawer-close" onclick="toggleSidebar(false)" aria-label="إغلاق">×</button></div><div class="user-card"><b>${esc(state.user?.name||'')}</b><small>${state.role==='admin'?'مدير النظام — تحكم كامل':'مدرس — طلاب + حضور + ملاحظات للأهل'}</small></div><div class="side-label">القائمة الرئيسية</div><nav class="side-nav">${navItems().map(n=>`<button class="${state.tab===n[0]?'active':''}" onclick="setTab('${n[0]}')"><i class="nav-icon">${n[1]}</i>${n[2]}</button>`).join('')}</nav><div class="side-label" style="margin-top:16px">الحساب</div><nav class="side-nav"><button onclick="goParent()"><i class="nav-icon">◫</i>معاينة بوابة الأهل</button><button onclick="logout()"><i class="nav-icon">↪</i>تسجيل الخروج</button></nav></aside><div class="drawer-backdrop ${state.sidebar?'show':''}" onclick="toggleSidebar(false)"></div>
-  <main class="main"><header class="topbar"><div class="row"><button class="btn outline mobile-menu" onclick="toggleSidebar()">☰</button><div class="page-title"><b>${labels[state.tab]||''}</b><small>${state.role==='admin'?'لوحة الإدارة الرئيسية':'إدارة الطلاب والحضور والملاحظات ضمن الشعب المخصصة'}</small></div></div><img class="top-logo" src="assets/logo.jpg" alt=""><div class="top-actions"><span class="badge ${state.role}">${state.role==='admin'?'الإدارة':'مدرس'}</span></div></header><section class="content"><img class="content-watermark" src="assets/logo.jpg" alt="">${pageContent()}</section></main></div>`;
+  <main class="main"><header class="topbar"><div class="row"><button class="btn outline mobile-menu" onclick="toggleSidebar()">☰</button><div class="page-title"><b>${labels[state.tab]||''}</b><small>${state.role==='admin'?'لوحة الإدارة الرئيسية':'إدارة الطلاب والحضور والملاحظات ضمن الشعب المخصصة'}</small></div></div><img class="top-logo" src="logo.jpg" alt=""><div class="top-actions"><span class="badge ${state.role}">${state.role==='admin'?'الإدارة':'مدرس'}</span></div></header><section class="content"><img class="content-watermark" src="logo.jpg" alt="">${pageContent()}</section></main></div>`;
 }
 function setTab(t){state.tab=t;state.sidebar=false;render();}
 function pageContent(){ const fn=window[`page_${state.tab}`]; return fn?fn():'<div class="card">الصفحة غير موجودة</div>'; }
@@ -455,15 +516,15 @@ function page_home(){
   const gr=d.grades||[], unread=(d.notifications||[]).filter(n=>!n.seen_at).length;
   const blocks=(d.buildings||[]).map(b=>{const fs=d.floors.filter(f=>f.building_id===b.id),rs=d.rooms.filter(r=>fs.some(f=>f.id===r.floor_id)),st=d.students.filter(s=>rs.some(r=>r.id===s.room_id)).length;return `<tr><td><b>${esc(b.name)}</b></td><td>${rs.length}</td><td>${rs.filter(r=>r.grade).length}</td><td>${st}</td><td><button class="btn small secondary" onclick="setTab('buildings')">فتح</button></td></tr>`}).join('');
   return `<div class="kpi-grid"><div class="card kpi"><div><b>إجمالي الطلاب</b><strong>${moneyLike(d.students?.length)}</strong></div><div class="kpi-icon">♟</div></div><div class="card kpi"><div><b>حاضر اليوم</b><strong>${at.filter(x=>x.status==='حاضر').length}</strong></div><div class="kpi-icon">✓</div></div><div class="card kpi"><div><b>غائب / متأخر</b><strong>${at.filter(x=>x.status==='غائب'||x.status==='متأخر').length}</strong></div><div class="kpi-icon">⏱</div></div><div class="card kpi"><div><b>إشعارات أهل غير مقروءة</b><strong>${unread}</strong></div><div class="kpi-icon">🔔</div></div></div>
-  <div class="two-col section"><div class="card"><div class="row between"><h3 class="section-title">الكتل المدرسية</h3><button class="btn small secondary" onclick="setTab('buildings')">إدارة الكتل</button></div><div class="table-wrap"><table><thead><tr><th>الكتلة</th><th>الغرف</th><th>المخصصة</th><th>الطلاب</th><th></th></tr></thead><tbody>${blocks}</tbody></table></div></div><div class="card"><h3 class="section-title">ملخص النظام</h3><div class="stack"><div class="row between"><span>المدرسون النشطون</span><b>${(d.teachers||[]).filter(t=>t.active!==false).length}</b></div><div class="row between"><span>ملاحظات الطلاب</span><b>${(d.studentNotes||[]).length}</b></div><div class="row between"><span>النتائج المسجلة</span><b>${gr.length}</b></div><div class="row between"><span>السنة الدراسية</span><b>${esc(d.settings?.academic_year||'—')}</b></div></div></div></div>
+  <div class="two-col section"><div class="card"><div class="row between"><h3 class="section-title">الأقسام والصفوف</h3><button class="btn small secondary" onclick="setTab('buildings')">إدارة الصفوف والشعب</button></div><div class="table-wrap"><table><thead><tr><th>القسم</th><th>الشعب</th><th>المحددة</th><th>الطلاب</th><th></th></tr></thead><tbody>${blocks}</tbody></table></div></div><div class="card"><h3 class="section-title">ملخص النظام</h3><div class="stack"><div class="row between"><span>المدرسون النشطون</span><b>${(d.teachers||[]).filter(t=>t.active!==false).length}</b></div><div class="row between"><span>ملاحظات الطلاب</span><b>${(d.studentNotes||[]).length}</b></div><div class="row between"><span>النتائج المسجلة</span><b>${gr.length}</b></div><div class="row between"><span>السنة الدراسية</span><b>${esc(d.settings?.academic_year||'—')}</b></div></div></div></div>
   <div class="card section"><div class="row between"><h3 class="section-title">آخر الطلاب المضافين</h3><button class="btn small secondary" onclick="setTab('students')">عرض الكل</button></div><div class="table-wrap"><table><thead><tr><th>الطالب</th><th>اسم الجد</th><th>الصف</th><th>الموقع</th><th>الكود</th></tr></thead><tbody>${(d.students||[]).slice(0,8).map(s=>`<tr><td><b>${esc(s.full_name)}</b></td><td>${esc(s.grandfather_name||'—')}</td><td>${esc(s.grade||'—')}</td><td>${esc(s.location_label||roomLocation(s.room_id))}</td><td><span class="code">${esc(s.access_code||'')}</span></td></tr>`).join('')||'<tr><td colspan="5" class="empty">لا يوجد طلاب بعد</td></tr>'}</tbody></table></div></div>`;
 }
 function page_students(){
   if(!['admin','teacher'].includes(state.role))return noAccess();
   const teacher=state.role==='teacher';
-  return `<div class="toolbar"><div><h2 class="section-title">${teacher?'طلاب الشعب المخصصة لي':'سجل الطلاب'}</h2><div class="muted">${teacher?'تستطيع إضافة الطلاب وتعديل ملفاتهم ضمن الشعب التي حددتها الإدارة لك.':'تحكم كامل بملفات الطلاب وربط كل طالب بالكتلة والطابق والغرفة.'}</div></div><button class="btn" onclick="openStudentModal()">+ تسجيل طالب جديد</button></div>${teacher?`<div class="role-note">الشعب المخصصة لك: <b>${assignedRoomsLabel(state.user.id)}</b></div>`:''}<div class="card"><div class="toolbar"><div class="field search"><label>بحث سريع</label><input id="studentSearch" placeholder="الاسم، الجد، الكود، الصف..." oninput="filterStudentTable()"></div><div class="hint">عدد الطلاب: <b>${state.data.students.length}</b></div></div><div id="studentTable">${studentTableHtml()}</div></div>`;
+  return `<div class="toolbar"><div><h2 class="section-title">${teacher?'طلاب الشعب المخصصة لي':'سجل الطلاب'}</h2><div class="muted">${teacher?'تستطيع إضافة الطلاب وتعديل ملفاتهم ضمن الشعب التي حددتها الإدارة لك.':'تحكم كامل بملفات الطلاب وربط كل طالب بالصف والشعبة الصحيحة.'}</div></div><button class="btn" onclick="openStudentModal()">+ تسجيل طالب جديد</button></div>${teacher?`<div class="role-note">الشعب المخصصة لك: <b>${assignedRoomsLabel(state.user.id)}</b></div>`:''}<div class="card"><div class="toolbar"><div class="field search"><label>بحث سريع</label><input id="studentSearch" placeholder="الاسم، الجد، الكود، الصف..." oninput="filterStudentTable()"></div><div class="hint">عدد الطلاب: <b>${state.data.students.length}</b></div></div><div id="studentTable">${studentTableHtml()}</div></div>`;
 }
-function roomLocation(roomId){const r=state.data.rooms?.find(x=>x.id===roomId);if(!r)return '—';const f=state.data.floors?.find(x=>x.id===r.floor_id),b=state.data.buildings?.find(x=>x.id===f?.building_id);return `${b?.name||''} / ${f?.name||''} / ${r.name||r.code}`;}
+function roomLocation(roomId){const r=state.data.rooms?.find(x=>x.id===roomId);if(!r)return '—';const f=state.data.floors?.find(x=>x.id===r.floor_id),b=state.data.buildings?.find(x=>x.id===f?.building_id);return `${b?.name||''} / ${r.name||r.code}`;}
 function studentTableHtml(q=''){
   q=q.toLowerCase(); const rows=(state.data.students||[]).filter(st=>!q||[st.full_name,st.father_name,st.grandfather_name,st.family_name,st.access_code,st.grade,st.class_name,st.building_name,st.floor_name,st.room_name,roomLocation(st.room_id)].some(v=>String(v||'').toLowerCase().includes(q)));
   return `<div class="table-wrap"><table><thead><tr><th>الطالب</th><th>الأب</th><th>الجد</th><th>الصف</th><th>الموقع</th><th>الكود</th><th>الحالة</th><th>إجراء</th></tr></thead><tbody>${rows.map(st=>`<tr><td><b>${esc(st.full_name)}</b></td><td>${esc(st.father_name||'—')}</td><td><b>${esc(st.grandfather_name||'—')}</b></td><td>${esc(st.grade||'—')} ${st.class_name?`/ ${esc(st.class_name)}`:''}</td><td>${esc(st.location_label||roomLocation(st.room_id))}</td><td><span class="code">${esc(st.access_code||'')}</span></td><td><span class="badge ${st.active===false?'inactive':'active'}">${st.active===false?'موقوف':'فعال'}</span></td><td>${state.role==='admin'?`<div class="row"><button class="btn small secondary" onclick="openStudentModal('${st.id}')">تعديل</button><button class="btn small warning" onclick="regenerateCode('${st.id}')">كود جديد</button><button class="btn small secondary" onclick="showStudentQr('${st.id}')">QR</button><button class="btn small" onclick="openNoteModal('${st.id}')">ملاحظة</button><button class="btn small danger" onclick="deleteStudent('${st.id}')">حذف</button></div>`:`<div class="row"><button class="btn small secondary" onclick="openStudentModal('${st.id}')">تعديل</button><button class="btn small secondary" onclick="showStudentQr('${st.id}')">QR</button><button class="btn small" onclick="openNoteModal('${st.id}')">ملاحظة للأهل</button></div>`}</td></tr>`).join('')||'<tr><td colspan="8" class="empty">لا توجد نتائج</td></tr>'}</tbody></table></div>`;
@@ -473,7 +534,8 @@ function assignedRoomIds(teacherId=state.user?.id){return (state.data.teacherAss
 function assignedRoomsLabel(teacherId){const ids=assignedRoomIds(teacherId);if(!ids.length)return 'لا توجد شعب مخصصة';return ids.map(id=>roomLocation(id)).join(' • ');}
 function roomOptions(selected=''){
   const allowed=state.role==='teacher'?new Set(assignedRoomIds()):null;
-  return `<option value="">— اختر الشعبة / الغرفة —</option>`+(state.data.rooms||[]).filter(r=>!allowed||allowed.has(r.id)).map(r=>{const f=state.data.floors.find(x=>x.id===r.floor_id),b=state.data.buildings.find(x=>x.id===f?.building_id);return `<option value="${r.id}" ${selected===r.id?'selected':''}>${esc(b?.name||'')} — ${esc(f?.name||'')} — ${esc(r.name)} ${r.grade?`(${esc(r.grade)}${r.section_label?' / '+esc(r.section_label):''})`:''}</option>`}).join('');
+  const rooms=(state.data.rooms||[]).filter(r=>!allowed||allowed.has(r.id));
+  return `<option value="">— اختر الصف والشعبة —</option>`+rooms.map(r=>{const f=state.data.floors.find(x=>x.id===r.floor_id),b=state.data.buildings.find(x=>x.id===f?.building_id);return `<option value="${r.id}" ${selected===r.id?'selected':''}>${esc(b?.name||'')} — ${esc(r.name||'')} </option>`}).join('');
 }
 function syncStudentRoom(){
   const id=document.getElementById('s_room')?.value,r=state.data.rooms?.find(x=>x.id===id);
@@ -497,9 +559,9 @@ function openStudentModal(id=''){
   </div></div>
 
   <div class="section"><h3 class="section-title">معلومات الشعبة</h3><div class="mini-grid">
-    <div class="field"><label>الصف *</label><input id="s_grade" value="${esc(st.grade||'')}" ${teacher?'readonly':''}></div>
-    <div class="field"><label>الغرفة المخصصة *</label><select id="s_room" onchange="syncStudentRoom()">${roomOptions(st.room_id||'')}</select></div>
-    <div class="field"><label>الشعبة</label><input id="s_class" value="${esc(st.class_name||'')}" ${teacher?'readonly':''}></div>
+    <div class="field"><label>الصف *</label><input id="s_grade" value="${esc(st.grade||'')}" readonly></div>
+    <div class="field"><label>الشعبة *</label><input id="s_class" value="${esc(st.class_name||'')}" readonly></div>
+    <div class="field"><label>اختيار الصف والشعبة *</label><select id="s_room" onchange="syncStudentRoom()">${roomOptions(st.room_id||'')}</select></div>
   </div></div>
 
   <div class="section"><h3 class="section-title">معلومات الاتصال</h3><div class="mini-grid">
@@ -560,7 +622,7 @@ function page_attendance(){
   const date=state.attDate||today(); const roster=allowedAttendanceStudents(); const records=(state.data.attendance||[]).filter(x=>x.date===date);
   const bopts=(state.data.buildings||[]).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
   return `<div class="toolbar"><div><h2 class="section-title">سجل الحضور والغياب والتأخير</h2><div class="muted">${state.role==='teacher'?'يمكنك تسجيل الحضور والغياب والتأخير للشعب المخصصة لك فقط.':'يمكن للإدارة والمدرسين المصرح لهم تحديث السجل.'}</div></div><div class="row"><div class="field" style="margin:0"><label>التاريخ</label><input id="attDate" type="date" value="${date}" onchange="changeAttDate(this.value)"></div></div></div>
-  <div class="card"><div class="toolbar"><div class="row filters"><div class="field search"><label>بحث</label><input id="attSearch" placeholder="اسم الطالب أو الصف" oninput="filterAttendanceRoster()"></div><div class="field"><label>الكتلة</label><select id="attBuilding" onchange="filterAttendanceRoster()"><option value="">كل الكتل</option>${bopts}</select></div><div class="field"><label>الغرفة</label><select id="attRoom" onchange="filterAttendanceRoster()"><option value="">كل الغرف</option>${(state.data.rooms||[]).filter(r=>state.role!=='teacher'||assignedRoomIds().includes(r.id)).map(r=>`<option value="${r.id}">${esc(roomLocation(r.id))}</option>`).join('')}</select></div></div><div class="hint">اختر الحالة ثم احفظ صف الطالب.</div></div><div id="attRoster">${attendanceTableHtml(roster,records,'','','')}</div></div>`;
+  <div class="card"><div class="toolbar"><div class="row filters"><div class="field search"><label>بحث</label><input id="attSearch" placeholder="اسم الطالب أو الصف" oninput="filterAttendanceRoster()"></div><div class="field"><label>القسم</label><select id="attBuilding" onchange="filterAttendanceRoster()"><option value="">كل الأقسام</option>${bopts}</select></div><div class="field"><label>الشعبة</label><select id="attRoom" onchange="filterAttendanceRoster()"><option value="">كل الشعب</option>${(state.data.rooms||[]).filter(r=>state.role!=='teacher'||assignedRoomIds().includes(r.id)).map(r=>`<option value="${r.id}">${esc(roomLocation(r.id))}</option>`).join('')}</select></div></div><div class="hint">اختر الحالة ثم احفظ صف الطالب.</div></div><div id="attRoster">${attendanceTableHtml(roster,records,'','','')}</div></div>`;
 }
 function attendanceTableHtml(roster,records,q='',buildingId='',roomId=''){
   q=q.toLowerCase(); const rows=roster.filter(s=>{const r=state.data.rooms?.find(x=>x.id===s.room_id),f=state.data.floors?.find(x=>x.id===r?.floor_id);return(!q||[s.full_name,s.grade,s.class_name,roomLocation(s.room_id)].some(v=>String(v||'').toLowerCase().includes(q)))&&(!buildingId||f?.building_id===buildingId)&&(!roomId||s.room_id===roomId)});
@@ -578,9 +640,9 @@ async function saveAttendanceRow(studentId){
 }
 function page_buildings(){
   if(state.role!=='admin')return noAccess();
-  const cards=(state.data.buildings||[]).map(b=>{const fs=state.data.floors.filter(f=>f.building_id===b.id),rs=state.data.rooms.filter(r=>fs.some(f=>f.id===r.floor_id)),assigned=rs.filter(r=>r.grade).length,students=state.data.students.filter(s=>rs.some(r=>r.id===s.room_id)).length;return `<div class="card building-card"><div class="row between"><div><div class="building-code">${esc(b.code)}</div><h3>${esc(b.name)}</h3></div><span class="badge active">${esc(b.audience||'عام')}</span></div><div class="building-stats"><div><b>${rs.length}</b><span>غرفة</span></div><div><b>${assigned}</b><span>مخصصة</span></div><div><b>${students}</b><span>طالب</span></div></div><p class="hint">${esc(b.notes||'')}</p></div>`}).join('');
-  const rows=(state.data.rooms||[]).map(r=>{const f=state.data.floors.find(x=>x.id===r.floor_id),b=state.data.buildings.find(x=>x.id===f?.building_id),count=state.data.students.filter(s=>s.room_id===r.id).length;return `<tr><td>${esc(b?.name||'')}</td><td>${esc(f?.name||'')}</td><td><span class="code">${esc(r.code)}</span></td><td>${esc(r.name)}</td><td>${r.grade?esc(r.grade):'<span class="badge warning">غير مخصص</span>'}</td><td>${esc(r.section_label||'—')}</td><td>${count}</td><td><button class="btn small secondary" onclick="openRoomModal('${r.id}')">تعديل</button></td></tr>`}).join('');
-  return `<div class="toolbar"><div><h2 class="section-title">الكتل والغرف</h2><div class="muted">هيكل المدرسة مثبت على 3 كتل ويمكنك تعديل تخصيص أي غرفة بنفسك.</div></div></div><div class="building-grid">${cards}</div><div class="card section"><div class="row between"><h3 class="section-title">دليل الغرف</h3><span class="hint">الغرف غير المحددة بقيت "غير مخصصة" بدل اختراع صفوف لم تذكرها.</span></div><div class="table-wrap"><table><thead><tr><th>الكتلة</th><th>الطابق</th><th>الكود</th><th>الغرفة</th><th>الصف</th><th>الشعبة</th><th>الطلاب</th><th>إجراء</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  const cards=(state.data.buildings||[]).map(b=>{const fs=state.data.floors.filter(f=>f.building_id===b.id),rs=state.data.rooms.filter(r=>fs.some(f=>f.id===r.floor_id)),students=state.data.students.filter(st=>rs.some(r=>r.id===st.room_id)).length;return `<div class="card building-card"><div class="row between"><div><h3 style="margin:0">${esc(b.name)}</h3><div class="hint">${esc(b.audience||'')}</div></div><span class="badge active">${rs.length} شعبة</span></div><div class="building-stats"><div><b>${rs.length}</b><span>شعبة</span></div><div><b>${students}</b><span>طالب</span></div></div></div>`}).join('');
+  const rows=(state.data.rooms||[]).map(r=>{const f=state.data.floors.find(x=>x.id===r.floor_id),b=state.data.buildings.find(x=>x.id===f?.building_id),count=state.data.students.filter(st=>st.room_id===r.id).length;return `<tr><td><b>${esc(b?.name||'')}</b></td><td>${esc(r.grade||'—')}</td><td>${esc(r.section_label||'—')}</td><td>${count}</td></tr>`}).join('');
+  return `<div class="toolbar"><div><h2 class="section-title">الصفوف والشعب</h2><div class="muted">التوزيع المدرسي مرتب حسب الابتدائي، ثم الإناث، ثم الذكور. لا تظهر الكتل والطوابق القديمة في الواجهة.</div></div></div><div class="building-grid">${cards}</div><div class="card section"><div class="row between"><h3 class="section-title">دليل الصفوف والشعب</h3><span class="hint">إجمالي الشعب: <b>${(state.data.rooms||[]).length}</b></span></div><div class="table-wrap"><table><thead><tr><th>القسم</th><th>الصف</th><th>الشعبة</th><th>الطلاب</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 function openRoomModal(id){const r=state.data.rooms.find(x=>x.id===id);if(!r)return;document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="modal"><div class="modalbox" style="max-width:560px"><div class="row between"><h2 class="section-title">تعديل الغرفة</h2><button class="btn outline" onclick="closeModal()">إغلاق</button></div><div id="modalMsg"></div><div class="field"><label>اسم الغرفة</label><input id="r_name" value="${esc(r.name)}"></div><div class="field"><label>الصف / المرحلة</label><input id="r_grade" value="${esc(r.grade||'')}" placeholder="اتركها فارغة إذا غير مخصصة"></div><div class="field"><label>الشعبة</label><input id="r_section" value="${esc(r.section_label||'')}"></div><button class="btn" onclick="saveRoom('${id}')">حفظ</button></div></div>`);}
 async function saveRoom(id){const row={name:document.getElementById('r_name').value.trim(),grade:document.getElementById('r_grade').value.trim(),section_label:document.getElementById('r_section').value.trim()};if(DEMO){Object.assign(state.data.rooms.find(x=>x.id===id),row);audit('تعديل','غرفة',roomLocation(id));saveDemo();closeModal();render();}else{const {error}=await sb.from('rooms').update(row).eq('id',id);if(error)return document.getElementById('modalMsg').innerHTML=`<div class="message error">${esc(error.message)}</div>`;await loadSupabaseData();closeModal();render();}}
@@ -658,12 +720,18 @@ async function deleteAnnouncement(id){if(!confirm('حذف الإعلان؟'))ret
 
 function teacherRoomCheckboxes(selected=[]){
   const set=new Set(selected||[]);
-  return `<div class="room-check-grid">${(state.data.rooms||[]).map(r=>`<label class="room-check"><input type="checkbox" name="teacher_room" value="${r.id}" ${set.has(r.id)?'checked':''}><span><b>${esc(roomLocation(r.id))}</b><small>${r.grade?`الصف ${esc(r.grade)}${r.section_label?' — الشعبة '+esc(r.section_label):''}`:'غرفة غير مخصصة'}</small></span></label>`).join('')}</div>`;
+  const groups=(state.data.buildings||[]).map(b=>{
+    const floorIds=new Set((state.data.floors||[]).filter(f=>f.building_id===b.id).map(f=>f.id));
+    const rooms=(state.data.rooms||[]).filter(r=>floorIds.has(r.floor_id));
+    if(!rooms.length)return '';
+    return `<div class="section"><div class="row between"><b>${esc(b.name)}</b><span class="hint">${rooms.length} شعبة</span></div><div class="room-check-grid">${rooms.map(r=>`<label class="room-check"><input type="checkbox" name="teacher_room" value="${r.id}" ${set.has(r.id)?'checked':''}><span><b>${esc(r.name)}</b><small>${esc(r.grade||'')} — ${esc(r.section_label||'')}</small></span></label>`).join('')}</div></div>`;
+  }).join('');
+  return `<div>${groups}</div>`;
 }
 function selectedTeacherRooms(){return [...document.querySelectorAll('input[name="teacher_room"]:checked')].map(x=>x.value);}
 function page_teachers(){
   if(state.role!=='admin')return noAccess();
-  return `<div class="toolbar"><div><h2 class="section-title">حسابات المدرسين وتوزيع الشعب</h2><div class="muted">يمكنك إضافة الأستاذ وتعديل اسمه أو بريده أو كلمة مروره أو شعبه، كما يمكنك حذف الحساب نهائياً.</div></div><button class="btn" onclick="openTeacherModal()">+ إضافة أستاذ</button></div><div class="role-note">توزيع الشعب يبقى بيد الإدارة فقط. حذف الأستاذ يحذف حساب دخوله ويزيل توزيعه على الشعب، ولا يحذف سجلات حضور الطلاب السابقة.</div><div class="card section"><div class="table-wrap"><table><thead><tr><th>اسم الأستاذ</th><th>${DEMO?'اسم المستخدم':'الحساب'}</th><th>الشعب المخصصة</th><th>الصلاحية</th><th>الحالة</th><th>إجراء</th></tr></thead><tbody>${state.data.teachers.map(t=>`<tr><td><b>${esc(t.full_name)}</b></td><td>${esc(t.username||t.email||t.id)}</td><td><div class="assignment-list">${assignedRoomIds(t.id).map(id=>`<span class="badge active">${esc(roomLocation(id))}</span>`).join(' ')||'<span class="badge warning">لم تحدد شعب</span>'}</div></td><td><span class="badge teacher">إضافة طلاب + حضور ضمن شعبه</span></td><td><span class="badge ${t.active===false?'inactive':'active'}">${t.active===false?'موقوف':'فعال'}</span></td><td><div class="row"><button class="btn small secondary" onclick="openTeacherEditModal('${t.id}')">تعديل</button><button class="btn small ${t.active===false?'secondary':'danger'}" onclick="toggleTeacher('${t.id}',${t.active===false?'true':'false'})">${t.active===false?'تفعيل':'إيقاف'}</button><button class="btn small danger" onclick="deleteTeacher('${t.id}')">حذف</button></div></td></tr>`).join('')||'<tr><td colspan="6" class="empty">لا يوجد مدرسون</td></tr>'}</tbody></table></div></div>`;
+  return `<div class="toolbar"><div><h2 class="section-title">حسابات المدرسين وتوزيع الشعب</h2><div class="muted">يمكنك إضافة الأستاذ وتعديل اسمه أو بريده أو كلمة مروره أو شعبه، كما يمكنك حذف الحساب نهائياً.</div></div><button class="btn" onclick="openTeacherModal()">+ إضافة أستاذ</button></div><div class="role-note">توزيع الشعب يبقى بيد الإدارة فقط. حذف الأستاذ يحذف حساب دخوله ويزيل توزيعه على الشعب، ولا يحذف سجلات حضور الطلاب السابقة.</div><div class="card section"><div class="table-wrap"><table><thead><tr><th>اسم الأستاذ</th><th>${DEMO?'اسم المستخدم':'الحساب'}</th><th>الشعب المخصصة</th><th>الصلاحية</th><th>الحالة</th><th>إجراء</th></tr></thead><tbody>${state.data.teachers.map(t=>`<tr><td><b>${esc(t.full_name)}</b></td><td>${esc(t.username||t.email||t.id)}</td><td><div class="assignment-list">${assignedRoomIds(t.id).map(id=>`<span class="badge active">${esc(roomLocation(id))}</span>`).join(' ')||'<span class="badge warning">لم تحدد شعب</span>'}</div></td><td><span class="badge teacher">إضافة طلاب + حضور ضمن شعبه</span></td><td><span class="badge ${t.active===false?'inactive':'active'}">${t.active===false?'موقوف':'فعال'}</span></td><td><div class="row"><button class="btn small secondary" onclick="openTeacherEditModal('${t.id}')">تعديل</button><button class="btn small secondary" onclick="openTeacherPasswordModal('${t.id}')">كلمة السر</button><button class="btn small ${t.active===false?'secondary':'danger'}" onclick="toggleTeacher('${t.id}',${t.active===false?'true':'false'})">${t.active===false?'تفعيل':'إيقاف'}</button><button class="btn small danger" onclick="deleteTeacher('${t.id}')">حذف</button></div></td></tr>`).join('')||'<tr><td colspan="6" class="empty">لا يوجد مدرسون</td></tr>'}</tbody></table></div></div>`;
 }
 function openTeacherModal(){document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="modal"><div class="modalbox"><div class="row between"><div><h2 class="section-title">إضافة أستاذ</h2><div class="muted">يمكن اختيار أكثر من شعبة للأستاذ نفسه.</div></div><button class="btn outline" onclick="closeModal()">إغلاق</button></div><div id="modalMsg"></div><div class="mini-grid section"><div class="field"><label>اسم الأستاذ *</label><input id="t_name"></div><div class="field"><label>${DEMO?'اسم المستخدم *':'البريد الإلكتروني *'}</label><input id="t_login" inputmode="email"></div><div class="field"><label>كلمة المرور المؤقتة *</label><input id="t_password" type="password"></div></div><div class="field"><label>الشعب المخصصة للأستاذ * — يمكنك اختيار أكثر من شعبة</label>${teacherRoomCheckboxes([])}</div><button class="btn" onclick="saveTeacher()">إنشاء الحساب وحفظ الشعب</button></div></div>`);}
 async function saveTeacher(){const full_name=document.getElementById('t_name').value.trim(),login=document.getElementById('t_login').value.trim(),password=document.getElementById('t_password').value,room_ids=selectedTeacherRooms(),msg=document.getElementById('modalMsg');if(!full_name||!login||password.length<6){msg.innerHTML='<div class="message error">أدخل الاسم والحساب وكلمة مرور 6 أحرف على الأقل.</div>';return;}if(!room_ids.length){msg.innerHTML='<div class="message error">اختر شعبة واحدة على الأقل للأستاذ.</div>';return;}try{if(DEMO){if(state.data.teachers.some(x=>x.username===login))throw new Error('اسم المستخدم موجود مسبقاً.');const id=uid();state.data.teachers.unshift({id,full_name,username:login,password,active:true});room_ids.forEach(room_id=>state.data.teacherAssignments.push({teacher_id:id,room_id}));audit('إضافة','مدرس',full_name);saveDemo();}else{const {data,error}=await sb.functions.invoke('create-teacher',{body:{email:login,password,full_name,room_ids}});if(error){let detail=error.message||'تعذر تشغيل خدمة إنشاء المدرس.';try{const body=await error.context?.json();if(body?.error)detail=body.error;}catch(_){}if(/not found|404|function/i.test(detail))detail+=' تأكد من نشر Edge Function create-teacher في Supabase.';throw new Error(detail);}if(data?.error)throw new Error(data.error);await loadSupabaseData();}closeModal();render();}catch(e){msg.innerHTML=`<div class="message error">${esc(authErrorArabic(e.message))}</div>`;}}
@@ -683,6 +751,21 @@ async function saveTeacherEdit(id){
     closeModal();render();
   }catch(e){msg.innerHTML=`<div class="message error">${esc(authErrorArabic(e.message))}</div>`;}
 }
+function openTeacherPasswordModal(id){
+  const t=state.data.teachers.find(x=>x.id===id);if(!t)return;
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="modal"><div class="modalbox" style="max-width:560px"><div class="row between"><div><h2 class="section-title">تغيير كلمة مرور الأستاذ</h2><div class="muted">${esc(t.full_name||'')} — لا يتم تغيير الاسم أو الشعب.</div></div><button class="btn outline" onclick="closeModal()">إغلاق</button></div><div id="modalMsg"></div><div class="field"><label>كلمة المرور الجديدة *</label><input id="tp_password" type="password" autocomplete="new-password"></div><div class="field"><label>تأكيد كلمة المرور *</label><input id="tp_confirm" type="password" autocomplete="new-password"></div><button class="btn" onclick="saveTeacherPassword('${id}')">حفظ كلمة المرور الجديدة</button></div></div>`);
+}
+async function saveTeacherPassword(id){
+  const p=document.getElementById('tp_password').value,c=document.getElementById('tp_confirm').value,msg=document.getElementById('modalMsg');
+  if(p.length<6){msg.innerHTML='<div class="message error">كلمة المرور يجب أن تكون 6 أحرف على الأقل.</div>';return;}
+  if(p!==c){msg.innerHTML='<div class="message error">تأكيد كلمة المرور غير مطابق.</div>';return;}
+  const t=state.data.teachers.find(x=>x.id===id);if(!t)return;
+  try{
+    if(DEMO){t.password=p;saveDemo();}
+    else{const room_ids=assignedRoomIds(id);const {data,error}=await sb.functions.invoke('manage-teacher',{body:{action:'update',teacher_id:id,full_name:t.full_name,password:p,room_ids}});if(error){let detail=error.message||'تعذر تغيير كلمة المرور.';try{const body=await error.context?.json();if(body?.error)detail=body.error;}catch(_){}throw new Error(detail);}if(data?.error)throw new Error(data.error);}
+    closeModal();alert('تم تغيير كلمة مرور الأستاذ بنجاح.');
+  }catch(e){msg.innerHTML=`<div class="message error">${esc(authErrorArabic(e.message))}</div>`;}
+}
 async function deleteTeacher(id){
   const t=state.data.teachers.find(x=>x.id===id);if(!t)return;
   if(!confirm(`حذف الأستاذ ${t.full_name} نهائياً؟ سيتم حذف حساب دخوله وإزالة الشعب المخصصة له.`))return;
@@ -697,7 +780,18 @@ async function toggleTeacher(id,active){if(DEMO){const t=state.data.teachers.fin
 
 function page_audit(){if(state.role!=='admin')return noAccess();return `<div class="toolbar"><div><h2 class="section-title">سجل العمليات</h2><div class="muted">مرجع لمعرفة من قام بالتعديل ومتى.</div></div></div><div class="card"><div class="table-wrap"><table><thead><tr><th>التاريخ</th><th>المستخدم</th><th>العملية</th><th>القسم</th><th>التفاصيل</th></tr></thead><tbody>${(state.data.audit||[]).map(a=>`<tr><td>${esc(new Date(a.created_at).toLocaleString('ar'))}</td><td>${esc(a.actor_name||a.actor||'—')}</td><td>${esc(a.action)}</td><td>${esc(a.entity||a.entity_type||'—')}</td><td>${esc(a.details||'—')}</td></tr>`).join('')||'<tr><td colspan="5" class="empty">لا توجد عمليات مسجلة</td></tr>'}</tbody></table></div></div>`;}
 
-function page_settings(){if(state.role!=='admin')return noAccess();const s=state.data.settings||{};return `<div class="toolbar"><div><h2 class="section-title">إعدادات المدرسة</h2><div class="muted">أنت تتحكم بالمعلومات الأساسية التي تظهر داخل النظام.</div></div></div><div class="card" style="max-width:850px"><div class="row" style="margin-bottom:15px">${logo().replace('<img','<img style="width:80px;height:80px;border-radius:50%;object-fit:cover"')}<div><b>الشعار الحالي</b><div class="hint">الشعار يظهر في صفحة الدخول، القائمة الجانبية، الشريط العلوي وداخل واجهة النظام.</div></div></div><div class="mini-grid"><div class="field"><label>اسم المدرسة</label><input id="set_name" value="${esc(s.school_name||'مدرسة المنارة الخاصة')}"></div><div class="field"><label>الاسم بالإنكليزية</label><input id="set_en" value="${esc(s.school_name_en||'MANARA PRIVATE SCHOOL')}"></div><div class="field"><label>تأسست عام</label><input id="set_year" value="${esc(s.established_year||'2007')}"></div><div class="field"><label>السنة الدراسية</label><input id="set_academic" value="${esc(s.academic_year||'2026/2027')}"></div><div class="field"><label>هاتف المدرسة</label><input id="set_phone" value="${esc(s.phone||'')}"></div><div class="field"><label>العنوان</label><input id="set_address" value="${esc(s.address||'')}"></div></div><button class="btn" onclick="saveSettings()">حفظ الإعدادات</button></div>`;}
+function page_settings(){if(state.role!=='admin')return noAccess();const st=state.data.settings||{};return `<div class="toolbar"><div><h2 class="section-title">إعدادات المدرسة</h2><div class="muted">إعدادات المدرسة والحساب الإداري.</div></div></div><div class="stack" style="max-width:850px"><div class="card"><div class="row" style="margin-bottom:15px">${logo().replace('<img','<img style="width:80px;height:80px;border-radius:50%;object-fit:cover"')}<div><b>الشعار الحالي</b><div class="hint">الشعار يظهر في صفحة الدخول وداخل واجهة النظام.</div></div></div><div class="mini-grid"><div class="field"><label>اسم المدرسة</label><input id="set_name" value="${esc(st.school_name||'مدرسة المنارة الخاصة')}"></div><div class="field"><label>الاسم بالإنكليزية</label><input id="set_en" value="${esc(st.school_name_en||'MANARA PRIVATE SCHOOL')}"></div><div class="field"><label>تأسست عام</label><input id="set_year" value="${esc(st.established_year||'2007')}"></div><div class="field"><label>السنة الدراسية</label><input id="set_academic" value="${esc(st.academic_year||'2026/2027')}"></div><div class="field"><label>هاتف المدرسة</label><input id="set_phone" value="${esc(st.phone||'')}"></div><div class="field"><label>العنوان</label><input id="set_address" value="${esc(st.address||'')}"></div></div><button class="btn" onclick="saveSettings()">حفظ الإعدادات</button></div><div class="card"><h3 class="section-title">تغيير كلمة مرور الإدارة</h3><div class="muted" style="margin-bottom:14px">تغيير كلمة مرور الحساب الإداري الذي أنت مسجل الدخول به الآن.</div><div class="mini-grid"><div class="field"><label>كلمة المرور الجديدة *</label><input id="admin_pass1" type="password" autocomplete="new-password"></div><div class="field"><label>تأكيد كلمة المرور *</label><input id="admin_pass2" type="password" autocomplete="new-password"></div></div><div id="adminPassMsg"></div><button class="btn" onclick="changeAdminPassword()">تغيير كلمة المرور</button></div></div>`;}
+async function changeAdminPassword(){
+  const p1=document.getElementById('admin_pass1').value,p2=document.getElementById('admin_pass2').value,msg=document.getElementById('adminPassMsg');
+  if(p1.length<6){msg.innerHTML='<div class="message error">كلمة المرور يجب أن تكون 6 أحرف على الأقل.</div>';return;}
+  if(p1!==p2){msg.innerHTML='<div class="message error">تأكيد كلمة المرور غير مطابق.</div>';return;}
+  try{
+    if(DEMO){msg.innerHTML='<div class="message ok">تم تغيير كلمة المرور في النسخة التجريبية.</div>';return;}
+    const {error}=await sb.auth.updateUser({password:p1});if(error)throw error;
+    document.getElementById('admin_pass1').value='';document.getElementById('admin_pass2').value='';
+    msg.innerHTML='<div class="message ok">تم تغيير كلمة مرور الإدارة بنجاح.</div>';
+  }catch(e){msg.innerHTML=`<div class="message error">${esc(authErrorArabic(e.message))}</div>`;}
+}
 async function saveSettings(){const row={school_name:document.getElementById('set_name').value.trim(),school_name_en:document.getElementById('set_en').value.trim(),established_year:document.getElementById('set_year').value.trim(),academic_year:document.getElementById('set_academic').value.trim(),phone:document.getElementById('set_phone').value.trim(),address:document.getElementById('set_address').value.trim()};if(DEMO){Object.assign(state.data.settings,row);audit('تعديل','إعدادات المدرسة',row.school_name);saveDemo();render();}else{const id=state.data.settings?.id;let res=id?await sb.from('school_settings').update(row).eq('id',id):await sb.from('school_settings').insert(row);if(res.error)return alert(res.error.message);await loadSupabaseData();render();}}
 function noAccess(){return `<div class="card"><h3>لا توجد صلاحية</h3><p class="muted">هذا الحساب غير مخول لفتح هذه الصفحة.</p></div>`;}
 
