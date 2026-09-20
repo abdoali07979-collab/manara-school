@@ -7,6 +7,53 @@ const LOGIN_REMEMBER_KEY = 'almanara_login_remember';
 const PARENT_CODE_KEY = 'manara_parent_saved_code';
 const FCM_TOKEN_KEY = 'manara_fcm_token';
 const PUBLIC_PARENT_PORTAL_URL = 'https://abdoali07979-collab.github.io/manara-school/';
+
+const APP_VERSION = '6.8.1';
+const APP_UPDATE_CACHE_KEY = 'manara_app_update_config_v1';
+function compareAppVersions(a='',b=''){
+  const pa=String(a||'0').replace(/^v/i,'').split('.').map(x=>parseInt(x,10)||0);
+  const pb=String(b||'0').replace(/^v/i,'').split('.').map(x=>parseInt(x,10)||0);
+  for(let i=0;i<Math.max(pa.length,pb.length,3);i++){
+    const av=pa[i]||0,bv=pb[i]||0;
+    if(av<bv)return -1;if(av>bv)return 1;
+  }
+  return 0;
+}
+function forcedUpdatePage(cfg={}){
+  const min=esc(cfg.minimum_version||''), latest=esc(cfg.latest_version||cfg.minimum_version||''), url=esc(cfg.update_url||PUBLIC_PARENT_PORTAL_URL);
+  const message=esc(cfg.update_message||'يتوفر تحديث جديد وإلزامي لتطبيق منارة العلم. يرجى تحديث التطبيق للمتابعة.');
+  return `<div class="public-page"><div class="public-shell"><div class="auth-card" style="max-width:560px;text-align:center;margin:auto"><div style="font-size:54px;margin-bottom:8px">⬆️</div><h2 style="margin-bottom:8px">يجب تحديث التطبيق</h2><p>${message}</p><div class="message error" style="text-align:center">نسختك الحالية: <b>V${esc(APP_VERSION)}</b>${min?` — الإصدار المطلوب: <b>V${min}</b>`:''}</div>${latest?`<div class="hint" style="margin:10px 0">أحدث إصدار: V${latest}</div>`:''}<a class="btn" style="display:inline-flex;text-decoration:none;margin-top:8px" href="${url}" target="_blank" rel="noopener">تحديث التطبيق الآن</a><div class="hint" style="margin-top:14px">تم إيقاف هذه النسخة حتى يتم التحديث حفاظاً على توافق البيانات وأمان النظام.</div></div></div></div>`;
+}
+async function enforceRequiredUpdate(){
+  if(DEMO || !sb)return false;
+  let cfg=null;
+  try{
+    const request=sb.from('app_update_config').select('minimum_version,latest_version,force_update,update_url,update_message,updated_at').eq('id',1).maybeSingle();
+    const result=await Promise.race([request,new Promise((_,reject)=>setTimeout(()=>reject(new Error('UPDATE_CHECK_TIMEOUT')),6000))]);
+    if(result?.error)throw result.error;
+    cfg=result?.data||null;
+    if(cfg)localStorage.setItem(APP_UPDATE_CACHE_KEY,JSON.stringify(cfg));
+  }catch(_){
+    try{cfg=JSON.parse(localStorage.getItem(APP_UPDATE_CACHE_KEY)||'null');}catch(__){cfg=null;}
+  }
+  if(!cfg || cfg.force_update!==true)return false;
+  if(compareAppVersions(APP_VERSION,cfg.minimum_version||'0')>=0)return false;
+  document.getElementById('app').innerHTML=forcedUpdatePage(cfg);
+  return true;
+}
+
+function manaraVersionedFetch(input,init={}){
+  try{
+    const url=typeof input==='string'?input:(input?.url||'');
+    if(String(url).includes('/rest/v1/')){
+      const headers=new Headers(init?.headers||(input instanceof Request?input.headers:undefined));
+      headers.set('x-manara-version',APP_VERSION);
+      init={...init,headers};
+    }
+  }catch(_){}
+  return fetch(input,init);
+}
+
 let sb = null;
 let state = { screen:'parent', user:null, role:null, tab:'home', portal:null, data:null, sidebar:false, loginNotice:'', portalPoll:null, pendingAuthUser:null, pendingAuthProfile:null, mfaEnroll:null };
 
@@ -18,9 +65,82 @@ function makeStudentCode(){
 }
 function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));}
 function today(){return new Date().toISOString().slice(0,10);}
-function logo(){return `<img src="logo.jpg" alt="شعار مدرسة المنارة">`;}
+function logo(){return `<img src="assets/logo.jpg" alt="شعار مدرسة المنارة">`;}
 function moneyLike(n){return Number(n||0).toLocaleString('ar');}
 function statusBadge(s){const cls=s==='حاضر'?'present':s==='غائب'?'absent':'late'; return `<span class="badge ${cls}">${esc(s)}</span>`;}
+
+const AR_NAME_COLLATOR=new Intl.Collator('ar',{sensitivity:'base',ignorePunctuation:true,numeric:true});
+function normalizeArabicSortName(v=''){return String(v||'').normalize('NFKD').replace(/[\u064B-\u065F\u0670]/g,'').replace(/[إأآٱ]/g,'ا').replace(/ى/g,'ي').replace(/ـ/g,'').trim();}
+function sortedByArabicName(list=[],key='full_name'){return [...(list||[])].sort((a,b)=>AR_NAME_COLLATOR.compare(normalizeArabicSortName(a?.[key]),normalizeArabicSortName(b?.[key])));}
+function normalizeSyriaWhatsappPhone(raw=''){
+  let d=String(raw||'').replace(/[^\d]/g,'');
+  if(d.startsWith('00963'))d=d.slice(2);
+  if(d.startsWith('963'))d=d.slice(3);
+  if(d.startsWith('0'))d=d.slice(1);
+  return /^9\d{8}$/.test(d)?`+963${d}`:'';
+}
+function syrianWhatsappLocal(raw=''){const p=normalizeSyriaWhatsappPhone(raw);return p?p.slice(4):String(raw||'').replace(/[^\d]/g,'').replace(/^0/,'').slice(-9);}
+function sanitizeSyriaWhatsappInput(el){
+  let d=String(el?.value||'').replace(/[^\d]/g,'');
+  if(d.startsWith('00963'))d=d.slice(5); else if(d.startsWith('963'))d=d.slice(3); else if(d.startsWith('0'))d=d.slice(1);
+  if(el)el.value=d.slice(0,9);
+}
+function whatsappHref(raw=''){const p=normalizeSyriaWhatsappPhone(raw);return p?`https://wa.me/${p.slice(1)}`:'';}
+function openStudentWhatsApp(id){
+  const st=state.data?.students?.find(x=>x.id===id),href=whatsappHref(st?.parent_phone||'');
+  if(!href)return alert('لا يوجد رقم واتساب صحيح لولي أمر هذا الطالب.');
+  window.open(href,'_blank','noopener');
+}
+function studentAvatarHtml(st={},size=44){
+  const n=String(st.full_name||'ط').trim()||'ط';
+  if(st.photo_url)return `<img src="${esc(st.photo_url)}" alt="صورة ${esc(n)}" style="width:${size}px;height:${size}px;object-fit:cover;border-radius:50%;border:2px solid #d9e7df;background:#f3f5f4;flex:0 0 auto">`;
+  return `<div class="student-avatar" style="width:${size}px;height:${size}px;min-width:${size}px;display:grid;place-items:center;border-radius:50%;font-size:${Math.max(16,Math.round(size*.36))}px">${esc(n[0])}</div>`;
+}
+function previewStudentPhoto(){
+  const file=document.getElementById('s_photo')?.files?.[0],box=document.getElementById('s_photo_preview');
+  if(!box)return;
+  if(!file){box.innerHTML='';return;}
+  if(!file.type.startsWith('image/')){box.innerHTML='<div class="message error">اختر ملف صورة فقط.</div>';return;}
+  if(file.size>12*1024*1024){box.innerHTML='<div class="message error">حجم الصورة كبير. اختر صورة أقل من 12 MB.</div>';return;}
+  const url=URL.createObjectURL(file);
+  box.innerHTML=`<img src="${url}" alt="معاينة الصورة" style="display:block;width:120px;height:120px;object-fit:cover;border-radius:50%;margin-top:10px;border:3px solid #dce9e2;background:#f3f5f4">`;
+  setTimeout(()=>URL.revokeObjectURL(url),10000);
+}
+async function compressStudentPhoto(file){
+  if(!file)return null;
+  if(!file.type.startsWith('image/'))throw new Error('اختر صورة صحيحة للطالب.');
+  if(file.size>12*1024*1024)throw new Error('حجم صورة الطالب كبير جداً. الحد الأقصى 12 MB.');
+  const src=await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsDataURL(file);});
+  const img=await new Promise((resolve,reject)=>{const i=new Image();i.onload=()=>resolve(i);i.onerror=reject;i.src=src;});
+  const side=Math.min(img.naturalWidth||img.width,img.naturalHeight||img.height),sx=((img.naturalWidth||img.width)-side)/2,sy=((img.naturalHeight||img.height)-side)/2;
+  const canvas=document.createElement('canvas');canvas.width=640;canvas.height=640;const ctx=canvas.getContext('2d');ctx.drawImage(img,sx,sy,side,side,0,0,640,640);
+  return await new Promise((resolve,reject)=>canvas.toBlob(b=>b?resolve(b):reject(new Error('تعذر تجهيز صورة الطالب.')),'image/jpeg',0.82));
+}
+async function blobToDataUrl(blob){return await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsDataURL(blob);});}
+async function uploadStudentPhoto(studentId,file){
+  if(!file||!studentId)return '';
+  const blob=await compressStudentPhoto(file),path=`${studentId}/profile.jpg`;
+  const {error}=await sb.storage.from('student-photos').upload(path,blob,{cacheControl:'3600',upsert:true,contentType:'image/jpeg'});
+  if(error)throw new Error('تم حفظ بيانات الطالب لكن تعذر رفع الصورة: '+error.message);
+  return path;
+}
+async function hydrateStudentPhotos(students=[]){
+  if(DEMO||!sb)return students;
+  const paths=[...new Set((students||[]).map(s=>s.photo_path).filter(Boolean))];
+  if(!paths.length)return (students||[]).map(s=>({...s,photo_url:''}));
+  const urls=new Map();
+  try{
+    if(typeof sb.storage.from('student-photos').createSignedUrls==='function'){
+      const {data,error}=await sb.storage.from('student-photos').createSignedUrls(paths,3600);
+      if(!error)(data||[]).forEach(x=>urls.set(x.path,x.signedUrl||''));
+    }
+    if(!urls.size){
+      await Promise.all(paths.map(async p=>{try{const {data,error}=await sb.storage.from('student-photos').createSignedUrl(p,3600);urls.set(p,error?'':(data?.signedUrl||''));}catch(_){urls.set(p,'');}}));
+    }
+  }catch(_){}
+  return (students||[]).map(s=>({...s,photo_url:s.photo_path?(urls.get(s.photo_path)||''):''}));
+}
+
 
 function normalizeStudentCode(raw=''){
   let v=String(raw||'').trim();
@@ -52,73 +172,12 @@ function scanParentQr(){
 }
 function chooseParentQrImage(){
   const msg=document.getElementById('portalMessage');
-
-  // Android app: use the native gallery/ML Kit bridge.
   if(isAndroidApp() && window.ManaraAndroid && typeof window.ManaraAndroid.chooseStudentQrImage==='function'){
     if(msg)msg.innerHTML='<div class="message">اختر صورة QR من الاستديو...</div>';
-    try{window.ManaraAndroid.chooseStudentQrImage();}catch(e){
-      if(msg)msg.innerHTML='<div class="message error">تعذر فتح الاستديو.</div>';
-    }
+    try{window.ManaraAndroid.chooseStudentQrImage();}catch(e){if(msg)msg.innerHTML='<div class="message error">تعذر فتح الاستديو.</div>';}
     return;
   }
-
-  // Website / iPhone / browser: choose a saved QR image from the device.
-  const input=document.createElement('input');
-  input.type='file';
-  input.accept='image/*';
-  input.style.display='none';
-  document.body.appendChild(input);
-
-  input.onchange=()=>{
-    const file=input.files && input.files[0];
-    if(!file){ input.remove(); return; }
-    if(msg)msg.innerHTML='<div class="message">جاري قراءة QR من الصورة...</div>';
-
-    const reader=new FileReader();
-    reader.onload=()=>{
-      const img=new Image();
-      img.onload=()=>{
-        try{
-          const canvas=document.createElement('canvas');
-          const max=1800;
-          let w=img.naturalWidth||img.width, h=img.naturalHeight||img.height;
-          const scale=Math.min(1,max/Math.max(w,h));
-          w=Math.max(1,Math.round(w*scale));
-          h=Math.max(1,Math.round(h*scale));
-          canvas.width=w; canvas.height=h;
-          const ctx=canvas.getContext('2d',{willReadFrequently:true});
-          ctx.drawImage(img,0,0,w,h);
-          const imageData=ctx.getImageData(0,0,w,h);
-
-          if(typeof window.jsQR!=='function'){
-            throw new Error('QR_LIBRARY_MISSING');
-          }
-          const result=window.jsQR(imageData.data,w,h,{inversionAttempts:'attemptBoth'});
-          if(!result || !result.data){
-            if(msg)msg.innerHTML='<div class="message error">لم يتم العثور على QR واضح داخل الصورة. جرّب صورة أوضح.</div>';
-          }else{
-            window.onManaraQrScanned(result.data);
-          }
-        }catch(e){
-          if(msg)msg.innerHTML='<div class="message error">تعذر قراءة QR من الصورة المختارة.</div>';
-        }finally{
-          input.remove();
-        }
-      };
-      img.onerror=()=>{
-        if(msg)msg.innerHTML='<div class="message error">تعذر فتح الصورة المختارة.</div>';
-        input.remove();
-      };
-      img.src=reader.result;
-    };
-    reader.onerror=()=>{
-      if(msg)msg.innerHTML='<div class="message error">تعذر قراءة الصورة المختارة.</div>';
-      input.remove();
-    };
-    reader.readAsDataURL(file);
-  };
-
-  input.click();
+  if(msg)msg.innerHTML='<div class="message error">اختيار صورة QR من الجهاز متاح حالياً داخل تطبيق Android.</div>';
 }
 window.onManaraQrScanned=function(raw){
   const code=normalizeStudentCode(raw);
@@ -241,6 +300,7 @@ async function init(){
       return;
     }
     sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY,{
+      global:{fetch:manaraVersionedFetch},
       auth:{
         persistSession:true,
         autoRefreshToken:true,
@@ -248,6 +308,7 @@ async function init(){
         storage:window.localStorage
       }
     });
+    if(await enforceRequiredUpdate()) return;
     sb.auth.onAuthStateChange((event,session)=>{
       if(event==='PASSWORD_RECOVERY'){
         state.user=null; state.role=null; state.screen='reset';
@@ -337,7 +398,7 @@ function requestAndroidParentPush(code){
 window.onManaraFcmToken=async function(token){
   if(!token || !pendingParentPushCode || DEMO)return;
   try{
-    const {data,error}=await sb.functions.invoke('parent-portal',{body:{action:'register_device',code:pendingParentPushCode,device_token:token,platform:'android'}});
+    const {data,error}=await sb.functions.invoke('parent-portal',{body:{client_version:APP_VERSION,action:'register_device',code:pendingParentPushCode,device_token:token,platform:'android'}});
     if(error)throw error;if(data?.error)throw new Error(data.error);
     localStorage.setItem(FCM_TOKEN_KEY,token);
     localStorage.setItem('manara_parent_push_code',pendingParentPushCode);
@@ -375,7 +436,7 @@ async function findStudentPortal(auto=false){
       if(!st)throw new Error('الكود غير صحيح أو الطالب غير موجود.');
       p={student:st,attendance:state.data.attendance.filter(x=>x.student_id===st.id).sort((a,b)=>b.date.localeCompare(a.date)),grades:state.data.grades.filter(x=>x.student_id===st.id).sort((a,b)=>(b.date||'').localeCompare(a.date||'')),announcements:state.data.announcements.slice().reverse(),notes:state.data.studentNotes.filter(x=>x.student_id===st.id&&x.visible_to_parent!==false).sort((a,b)=>(b.created_at||'').localeCompare(a.created_at||'')),notifications:state.data.notifications.filter(x=>x.student_id===st.id).sort((a,b)=>(b.created_at||'').localeCompare(a.created_at||'')),settings:state.data.settings||{}};
     }else{
-      const {data,error}=await sb.functions.invoke('parent-portal',{body:{action:'get',code}});
+      const {data,error}=await sb.functions.invoke('parent-portal',{body:{client_version:APP_VERSION,action:'get',code}});
       if(error)throw error;if(data?.error)throw new Error(data.error);p=data?.portal;
       if(!p?.student)throw new Error('الكود غير صحيح أو الطالب غير موجود.');
     }
@@ -393,7 +454,7 @@ function portalHtml(p){
   const pst=p.settings||{},phone1=String(pst.phone||'').trim(),phone2=String(pst.phone2||'').trim();
   const phoneCard=(phone1||phone2)?`<div class="section"><div class="card"><h3 style="margin-top:0">التواصل مع مدير مدرسة منارة العلم الخاصة</h3><div class="row" style="gap:10px;flex-wrap:wrap">${phone1?`<a class="btn secondary" href="tel:${esc(phone1)}">📞 ${esc(phone1)}</a>`:''}${phone2?`<a class="btn secondary" href="tel:${esc(phone2)}">📞 ${esc(phone2)}</a>`:''}</div></div></div>`:'';
   setTimeout(()=>notifyParentDevice(notifications.filter(n=>!n.seen_at)),80);
-  return `<div class="public-card"><div class="student-banner"><div class="student-avatar">${esc((s.full_name||'ط')[0])}</div><div><h2 style="margin:0">${esc(s.full_name)}</h2><div class="muted">الصف ${esc(s.grade||'—')} — الشعبة ${esc(s.class_name||'—')}</div><div class="hint">اسم الجد: ${esc(s.grandfather_name||'—')} ${s.location_label?`— ${esc(s.location_label)}`:''}</div></div>${unread?`<span class="notification-count">${unread} جديد</span>`:''}</div>
+  return `<div class="public-card"><div class="student-banner">${studentAvatarHtml(s,72)}<div><h2 style="margin:0">${esc(s.full_name)}</h2><div class="muted">الصف ${esc(s.grade||'—')} — الشعبة ${esc(s.class_name||'—')}</div><div class="hint">اسم الجد: ${esc(s.grandfather_name||'—')} ${s.location_label?`— ${esc(s.location_label)}`:''}</div></div>${unread?`<span class="notification-count">${unread} جديد</span>`:''}</div>
   <div class="portal-actions section">${isAndroidApp()?'<span id="pushStatus"><button class="btn secondary" onclick="requestAndroidParentPush(localStorage.getItem(\'manara_parent_push_code\')||pendingParentPushCode)">🔔 تفعيل إشعارات الهاتف</button></span>':'<button class="btn secondary" onclick="enableParentNotifications()">🔔 تفعيل إشعارات المتصفح</button>'}${unread?'<button class="btn outline" onclick="markPortalNotificationsSeen()">تحديد الإشعارات كمقروءة</button>':''}<button class="btn danger" onclick="logoutParentPortal()">تسجيل الخروج</button></div>
   ${notes.length?`<div class="section"><div class="row between"><h3>ملاحظات الطالب</h3><span class="badge warning">تصل مباشرة على كود الطالب</span></div>${notes.map(n=>`<div class="student-note ${n.importance==='مهم'?'important':''}"><div class="row between"><b>${esc(n.title||'ملاحظة من المدرسة')}</b><small>${esc((n.created_at||'').slice(0,10))}</small></div><div>${esc(n.content)}</div>${n.image_url?`<a href="${esc(n.image_url)}" target="_blank" rel="noopener"><img src="${esc(n.image_url)}" alt="صورة مرفقة بالملاحظة" style="display:block;width:100%;max-width:520px;max-height:520px;object-fit:contain;border-radius:16px;margin-top:12px;background:#f3f5f4"></a>`:''}<small class="muted">${esc(n.category||'ملاحظة عامة')}</small></div>`).join('')}</div>`:''}
   <div class="portal-kpis section"><div class="card"><span class="muted">الحضور</span><strong>${present}</strong></div><div class="card"><span class="muted">الغياب</span><strong>${absent}</strong></div><div class="card"><span class="muted">التأخير</span><strong>${late}</strong></div><div class="card"><span class="muted">المعدل</span><strong>${avg}${avg==='—'?'':'%'}</strong></div></div>
@@ -409,21 +470,21 @@ async function enableParentNotifications(){
 }
 function notifyParentDevice(items){
   if(!items?.length || !('Notification' in window) || Notification.permission!=='granted')return;
-  const n=items[0]; try{new Notification(n.title||'مدرسة المنارة',{body:n.body||'لديك ملاحظة جديدة تخص الطالب.',icon:'logo.jpg'});}catch(e){}
+  const n=items[0]; try{new Notification(n.title||'مدرسة المنارة',{body:n.body||'لديك ملاحظة جديدة تخص الطالب.',icon:'assets/logo.jpg'});}catch(e){}
 }
 async function markPortalNotificationsSeen(){
   if(!state.portal?.student)return;
   const code=normalizeStudentCode(localStorage.getItem(PARENT_CODE_KEY)||document.getElementById('portalCode')?.value||'');
   if(DEMO){const sid=state.portal.student.id;state.data.notifications.filter(n=>n.student_id===sid).forEach(n=>n.seen_at=n.seen_at||new Date().toISOString());saveDemo();state.portal.notifications=state.data.notifications.filter(n=>n.student_id===sid);render();return;}
   try{
-    const {data,error}=await sb.functions.invoke('parent-portal',{body:{action:'mark_seen',code}});if(error)throw error;if(data?.error)throw new Error(data.error);
-    const fresh=await sb.functions.invoke('parent-portal',{body:{action:'get',code}});if(fresh.error)throw fresh.error;state.portal=fresh.data?.portal;render();
+    const {data,error}=await sb.functions.invoke('parent-portal',{body:{client_version:APP_VERSION,action:'mark_seen',code}});if(error)throw error;if(data?.error)throw new Error(data.error);
+    const fresh=await sb.functions.invoke('parent-portal',{body:{client_version:APP_VERSION,action:'get',code}});if(fresh.error)throw fresh.error;state.portal=fresh.data?.portal;render();
   }catch(e){alert(authErrorArabic(e.message));}
 }
 async function logoutParentPortal(){
   const code=normalizeStudentCode(localStorage.getItem(PARENT_CODE_KEY)||'');
   const token=localStorage.getItem(FCM_TOKEN_KEY)||'';
-  try{if(!DEMO&&code&&token)await sb.functions.invoke('parent-portal',{body:{action:'unregister_device',code,device_token:token}});}catch(_){}
+  try{if(!DEMO&&code&&token)await sb.functions.invoke('parent-portal',{body:{client_version:APP_VERSION,action:'unregister_device',code,device_token:token}});}catch(_){}
   localStorage.removeItem(PARENT_CODE_KEY);localStorage.removeItem('manara_parent_push_code');localStorage.removeItem('manara_parent_push_enabled');localStorage.removeItem(FCM_TOKEN_KEY);
   pendingParentPushCode='';state.portal=null;state.screen='parent';render();
 }
@@ -561,7 +622,7 @@ async function loadSupabaseData(){
       sb.from('parent_notifications').select('*').order('created_at',{ascending:false}).limit(1000),
       sb.from('teacher_room_assignments').select('*')
     ]);
-    const students=(st.data||[]).map(x=>({...x,room_name:x.rooms?.name,room_code:x.rooms?.code,floor_name:x.rooms?.floors?.name,building_name:x.rooms?.floors?.buildings?.name,location_label:x.rooms?`${x.rooms?.floors?.buildings?.name||''} / ${x.rooms?.name||''}`:''}));
+    const students=await hydrateStudentPhotos((st.data||[]).map(x=>({...x,room_name:x.rooms?.name,room_code:x.rooms?.code,floor_name:x.rooms?.floors?.name,building_name:x.rooms?.floors?.buildings?.name,location_label:x.rooms?`${x.rooms?.floors?.buildings?.name||''} / ${x.rooms?.name||''}`:''})));
     state.data={students,attendance:at.data||[],grades:(gr.data||[]).map(x=>({...x,exam_name:x.grade_items?.title,max_score:x.grade_items?.max_score,date:x.grade_items?.exam_date,subject_name:x.grade_items?.subjects?.name})),announcements:an.data||[],subjects:su.data||[],teachers:pr.data||[],settings:se.data||{},audit:au.data||[],buildings:bu.data||[],floors:fl.data||[],rooms:ro.data||[],studentNotes:await hydrateNoteImages(sn.data||[]),notifications:pn.data||[],teacherAssignments:ta.data||[]};
   }else{
     const [st,at,se,bu,fl,ro,sn,ta]=await Promise.all([
@@ -576,7 +637,7 @@ async function loadSupabaseData(){
     ]);
     const teacherAssignments=ta.data||[];
     const allowedRooms=new Set(teacherAssignments.map(x=>x.room_id));
-    const students=(st.data||[]).map(x=>({...x,room_name:x.rooms?.name,room_code:x.rooms?.code,floor_name:x.rooms?.floors?.name,building_name:x.rooms?.floors?.buildings?.name,location_label:x.rooms?`${x.rooms?.floors?.buildings?.name||''} / ${x.rooms?.name||''}`:''})).filter(x=>allowedRooms.has(x.room_id));
+    const students=await hydrateStudentPhotos((st.data||[]).map(x=>({...x,room_name:x.rooms?.name,room_code:x.rooms?.code,floor_name:x.rooms?.floors?.name,building_name:x.rooms?.floors?.buildings?.name,location_label:x.rooms?`${x.rooms?.floors?.buildings?.name||''} / ${x.rooms?.name||''}`:''})).filter(x=>allowedRooms.has(x.room_id)));
     const allowedStudentIds=new Set(students.map(x=>x.id));
     const attendance=(at.data||[]).filter(x=>allowedStudentIds.has(x.student_id));
     const teacherNotes=(sn.data||[]).filter(x=>allowedStudentIds.has(x.student_id));
@@ -591,7 +652,7 @@ function appPage(){
   const labels={home:'الرئيسية',buildings:'الصفوف والشعب',students:'الطلاب',attendance:'الحضور والغياب',notes:'ملاحظات الطلاب',grades:'النتائج',announcements:'الإعلانات',teachers:'إدارة المدرسين',audit:'سجل العمليات',settings:'الإعدادات'};
   if(state.role==='teacher'&&!['home','students','attendance','notes'].includes(state.tab))state.tab='home';
   return `<div class="app-shell"><aside class="sidebar ${state.sidebar?'open':''}"><div class="side-brand">${logo()}<div><b>${esc(state.data?.settings?.school_name||'مدرسة المنارة الخاصة')}</b><small>MANARA PRIVATE SCHOOL</small></div><button class="drawer-close" onclick="toggleSidebar(false)" aria-label="إغلاق">×</button></div><div class="user-card"><b>${esc(state.user?.name||'')}</b><small>${state.role==='admin'?'مدير النظام — تحكم كامل':'مدرس — طلاب + حضور + ملاحظات للأهل'}</small></div><div class="side-label">القائمة الرئيسية</div><nav class="side-nav">${navItems().map(n=>`<button class="${state.tab===n[0]?'active':''}" onclick="setTab('${n[0]}')"><i class="nav-icon">${n[1]}</i>${n[2]}</button>`).join('')}</nav><div class="side-label" style="margin-top:16px">الحساب</div><nav class="side-nav"><button onclick="goParent()"><i class="nav-icon">◫</i>معاينة بوابة الأهل</button><button onclick="logout()"><i class="nav-icon">↪</i>تسجيل الخروج</button></nav></aside><div class="drawer-backdrop ${state.sidebar?'show':''}" onclick="toggleSidebar(false)"></div>
-  <main class="main"><header class="topbar"><div class="row"><button class="btn outline mobile-menu" onclick="toggleSidebar()">☰</button><div class="page-title"><b>${labels[state.tab]||''}</b><small>${state.role==='admin'?'لوحة الإدارة الرئيسية':'إدارة الطلاب والحضور والملاحظات ضمن الشعب المخصصة'}</small></div></div><img class="top-logo" src="logo.jpg" alt=""><div class="top-actions"><span class="badge ${state.role}">${state.role==='admin'?'الإدارة':'مدرس'}</span></div></header><section class="content"><img class="content-watermark" src="logo.jpg" alt="">${pageContent()}</section></main></div>`;
+  <main class="main"><header class="topbar"><div class="row"><button class="btn outline mobile-menu" onclick="toggleSidebar()">☰</button><div class="page-title"><b>${labels[state.tab]||''}</b><small>${state.role==='admin'?'لوحة الإدارة الرئيسية':'إدارة الطلاب والحضور والملاحظات ضمن الشعب المخصصة'}</small></div></div><img class="top-logo" src="assets/logo.jpg" alt=""><div class="top-actions"><span class="badge ${state.role}">${state.role==='admin'?'الإدارة':'مدرس'}</span></div></header><section class="content"><img class="content-watermark" src="assets/logo.jpg" alt="">${pageContent()}</section></main></div>`;
 }
 function setTab(t){state.tab=t;state.sidebar=false;render();}
 function pageContent(){ const fn=window[`page_${state.tab}`]; return fn?fn():'<div class="card">الصفحة غير موجودة</div>'; }
@@ -614,8 +675,9 @@ function page_students(){
 }
 function roomLocation(roomId){const r=state.data.rooms?.find(x=>x.id===roomId);if(!r)return '—';const f=state.data.floors?.find(x=>x.id===r.floor_id),b=state.data.buildings?.find(x=>x.id===f?.building_id);return `${b?.name||''} / ${r.name||r.code}`;}
 function studentTableHtml(q=''){
-  q=q.toLowerCase(); const rows=(state.data.students||[]).filter(st=>!q||[st.full_name,st.father_name,st.grandfather_name,st.family_name,st.access_code,st.grade,st.class_name,st.building_name,st.floor_name,st.room_name,roomLocation(st.room_id)].some(v=>String(v||'').toLowerCase().includes(q)));
-  return `<div class="table-wrap"><table><thead><tr><th>الطالب</th><th>الأب</th><th>الجد</th><th>الصف</th><th>الموقع</th><th>الكود</th><th>الحالة</th><th>إجراء</th></tr></thead><tbody>${rows.map(st=>`<tr><td><b>${esc(st.full_name)}</b></td><td>${esc(st.father_name||'—')}</td><td><b>${esc(st.grandfather_name||'—')}</b></td><td>${esc(st.grade||'—')} ${st.class_name?`/ ${esc(st.class_name)}`:''}</td><td>${esc(st.location_label||roomLocation(st.room_id))}</td><td><span class="code">${esc(st.access_code||'')}</span></td><td><span class="badge ${st.active===false?'inactive':'active'}">${st.active===false?'موقوف':'فعال'}</span></td><td>${state.role==='admin'?`<div class="row"><button class="btn small secondary" onclick="openStudentModal('${st.id}')">تعديل</button><button class="btn small warning" onclick="regenerateCode('${st.id}')">كود جديد</button><button class="btn small secondary" onclick="showStudentQr('${st.id}')">QR</button><button class="btn small" onclick="openNoteModal('${st.id}')">ملاحظة</button><button class="btn small danger" onclick="deleteStudent('${st.id}')">حذف</button></div>`:`<div class="row"><button class="btn small secondary" onclick="openStudentModal('${st.id}')">تعديل</button><button class="btn small secondary" onclick="showStudentQr('${st.id}')">QR</button><button class="btn small" onclick="openNoteModal('${st.id}')">ملاحظة للأهل</button><button class="btn small danger" onclick="deleteStudent('${st.id}')">حذف</button></div>`}</td></tr>`).join('')||'<tr><td colspan="8" class="empty">لا توجد نتائج</td></tr>'}</tbody></table></div>`;
+  q=q.toLowerCase();
+  const rows=sortedByArabicName((state.data.students||[]).filter(st=>!q||[st.full_name,st.father_name,st.grandfather_name,st.family_name,st.parent_phone,st.access_code,st.grade,st.class_name,st.building_name,st.floor_name,st.room_name,roomLocation(st.room_id)].some(v=>String(v||'').toLowerCase().includes(q))));
+  return `<div class="table-wrap"><table><thead><tr><th>الطالب</th><th>الأب</th><th>الجد</th><th>الصف</th><th>الموقع</th><th>واتساب الأهل</th><th>الكود</th><th>الحالة</th><th>إجراء</th></tr></thead><tbody>${rows.map(st=>`<tr><td><div class="row" style="gap:9px;align-items:center">${studentAvatarHtml(st,42)}<b>${esc(st.full_name)}</b></div></td><td>${esc(st.father_name||'—')}</td><td><b>${esc(st.grandfather_name||'—')}</b></td><td>${esc(st.grade||'—')} ${st.class_name?`/ ${esc(st.class_name)}`:''}</td><td>${esc(st.location_label||roomLocation(st.room_id))}</td><td>${whatsappHref(st.parent_phone)?`<button class="btn small secondary" onclick="openStudentWhatsApp('${st.id}')">💬 ${esc(st.parent_phone)}</button>`:'—'}</td><td><span class="code">${esc(st.access_code||'')}</span></td><td><span class="badge ${st.active===false?'inactive':'active'}">${st.active===false?'موقوف':'فعال'}</span></td><td>${state.role==='admin'?`<div class="row"><button class="btn small secondary" onclick="openStudentModal('${st.id}')">تعديل</button><button class="btn small warning" onclick="regenerateCode('${st.id}')">كود جديد</button><button class="btn small secondary" onclick="showStudentQr('${st.id}')">QR</button><button class="btn small" onclick="openNoteModal('${st.id}')">ملاحظة</button><button class="btn small danger" onclick="deleteStudent('${st.id}')">حذف</button></div>`:`<div class="row"><button class="btn small secondary" onclick="openStudentModal('${st.id}')">تعديل</button><button class="btn small secondary" onclick="showStudentQr('${st.id}')">QR</button><button class="btn small" onclick="openNoteModal('${st.id}')">ملاحظة للأهل</button><button class="btn small danger" onclick="deleteStudent('${st.id}')">حذف</button></div>`}</td></tr>`).join('')||'<tr><td colspan="9" class="empty">لا توجد نتائج</td></tr>'}</tbody></table></div>`;
 }
 function filterStudentTable(){document.getElementById('studentTable').innerHTML=studentTableHtml(document.getElementById('studentSearch').value.trim());applyMobileUi();}
 function assignedRoomIds(teacherId=state.user?.id){return (state.data.teacherAssignments||[]).filter(a=>a.teacher_id===teacherId).map(a=>a.room_id);}
@@ -637,7 +699,9 @@ function openStudentModal(id=''){
   if(teacher && assignedRoomIds().length===0){alert('لا توجد شعبة مخصصة لحسابك بعد. اطلب من الإدارة تحديد شعبتك أولاً.');return;}
   document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="modal"><div class="modalbox"><div class="row between"><div><h2 class="section-title">${id?'تعديل ملف الطالب':'تسجيل طالب جديد'}</h2><div class="muted">${teacher?'يمكنك إضافة الطالب أو تعديل ملفه، لكن فقط ضمن الشعب المخصصة لك.':'الإدارة تستطيع تعديل بيانات الطالب وموقعه.'}</div></div><button class="btn outline" onclick="closeModal()">إغلاق</button></div><div id="modalMsg"></div>
 
-  <div class="section"><h3 class="section-title">المعلومات الشخصية</h3><div class="mini-grid">
+  <div class="section"><h3 class="section-title">المعلومات الشخصية</h3>
+  <div class="field"><label>الصورة الشخصية للطالب — اختياري</label><input id="s_photo" type="file" accept="image/*" capture="environment" onchange="previewStudentPhoto()"><div class="hint">يمكن التصوير مباشرة أو اختيار صورة. سيتم قص الصورة بشكل مربع وتصغيرها تلقائياً.</div><div id="s_photo_preview">${st.photo_url?studentAvatarHtml(st,120):''}</div></div>
+  <div class="mini-grid">
     <div class="field"><label>اسم الطالب الكامل *</label><input id="s_full" value="${esc(st.full_name||'')}"></div>
     <div class="field"><label>اسم الأب</label><input id="s_father" value="${esc(st.father_name||'')}"></div>
     <div class="field"><label>اسم الأم الكامل</label><input id="s_mother" value="${esc(st.mother_name||'')}"></div>
@@ -653,7 +717,7 @@ function openStudentModal(id=''){
   </div></div>
 
   <div class="section"><h3 class="section-title">معلومات الاتصال</h3><div class="mini-grid">
-    <div class="field"><label>رقم هاتف ولي الأمر</label><input id="s_phone" inputmode="tel" value="${esc(st.parent_phone||'')}"></div>
+    <div class="field"><label>رقم واتساب ولي الأمر *</label><div style="display:flex;align-items:center;gap:8px;direction:ltr"><span style="padding:10px 12px;border:1px solid #d7e1dc;border-radius:10px;background:#f4f7f5;font-weight:700">+963</span><input id="s_phone_local" inputmode="numeric" maxlength="9" placeholder="9XXXXXXXX" value="${esc(syrianWhatsappLocal(st.parent_phone||''))}" oninput="sanitizeSyriaWhatsappInput(this)" style="direction:ltr"></div><div class="hint">أدخل 9 أرقام تبدأ بـ 9. يُحفظ الرقم بصيغة واتساب الدولية +963.</div></div>
     <div class="field"><label>العنوان</label><input id="s_address" value="${esc(st.address||'')}"></div>
     <div class="field"><label>الحالة</label><select id="s_active"><option value="true" ${st.active!==false?'selected':''}>فعال</option><option value="false" ${st.active===false?'selected':''}>موقوف</option></select></div>
   </div></div>
@@ -671,20 +735,33 @@ function duplicateStudentLocal(row,id=''){
   return (state.data.students||[]).find(x=>x.id!==id&&normalizeIdentityValue(x.full_name)===normalizeIdentityValue(row.full_name)&&normalizeIdentityValue(x.father_name)===normalizeIdentityValue(row.father_name)&&normalizeIdentityValue(x.mother_name)===normalizeIdentityValue(row.mother_name)&&normalizeIdentityValue(x.grandfather_name)===normalizeIdentityValue(row.grandfather_name)&&String(x.date_of_birth||'')===String(row.date_of_birth||''));
 }
 async function invokeSecureFunction(name,body){
+  body={...(body||{}),client_version:APP_VERSION};
   const {data,error}=await sb.functions.invoke(name,{body});
   if(error){let detail=error.message||`تعذر تشغيل ${name}`;try{const j=await error.context?.json();if(j?.error)detail=j.error;}catch(_){}throw new Error(detail);}
   if(data?.error)throw new Error(data.error);return data;
 }
 async function saveStudent(id=''){
-  const msg=document.getElementById('modalMsg');let newStudentId='';
+  const msg=document.getElementById('modalMsg');let newStudentId='';const current=state.data.students.find(x=>x.id===id)||{};
   const full=document.getElementById('s_full').value.trim(),grand=document.getElementById('s_grand').value.trim(),grade=document.getElementById('s_grade').value.trim(),room_id=document.getElementById('s_room').value||null;
+  const parent_phone=normalizeSyriaWhatsappPhone(document.getElementById('s_phone_local')?.value||''),photoFile=document.getElementById('s_photo')?.files?.[0]||null;
   if(!full||!grand||!grade||!room_id){msg.innerHTML='<div class="message error">اسم الطالب واسم الجد والصف والشعبة حقول إلزامية.</div>';return;}
+  if(!parent_phone){msg.innerHTML='<div class="message error">رقم واتساب ولي الأمر إلزامي. أدخل 9 أرقام سورية تبدأ بـ 9، وسيتم حفظها مع +963.</div>';return;}
   if(state.role==='teacher'&&!assignedRoomIds().includes(room_id)){msg.innerHTML='<div class="message error">لا يمكنك إضافة طالب إلى شعبة غير مخصصة لك.</div>';return;}
-  const row={full_name:full,father_name:document.getElementById('s_father').value.trim(),mother_name:document.getElementById('s_mother').value.trim(),grandfather_name:grand,grade,class_name:document.getElementById('s_class').value.trim(),room_id,gender:document.getElementById('s_gender').value,date_of_birth:document.getElementById('s_birth').value||null,parent_phone:document.getElementById('s_phone').value.trim(),address:document.getElementById('s_address').value.trim(),active:document.getElementById('s_active')?.value!=='false',transport_car_number:document.getElementById('s_transport').value.trim(),notes:document.getElementById('s_notes')?.value.trim()||''};
+  const row={full_name:full,father_name:document.getElementById('s_father').value.trim(),mother_name:document.getElementById('s_mother').value.trim(),grandfather_name:grand,grade,class_name:document.getElementById('s_class').value.trim(),room_id,gender:document.getElementById('s_gender').value,date_of_birth:document.getElementById('s_birth').value||null,parent_phone,address:document.getElementById('s_address').value.trim(),active:document.getElementById('s_active')?.value!=='false',transport_car_number:document.getElementById('s_transport').value.trim(),notes:document.getElementById('s_notes')?.value.trim()||'',photo_path:current.photo_path||''};
   const dup=duplicateStudentLocal(row,id);if(!id&&dup){msg.innerHTML=`<div class="message error"><b>الطالب موجود مسبقاً.</b><br>تم العثور على نفس اسم الطالب والأب والأم والجد وتاريخ الميلاد، لذلك لن يتم إنشاء نسخة مكررة.</div>`;return;}
   try{
-    if(DEMO){const room=state.data.rooms.find(r=>r.id===room_id),f=state.data.floors.find(x=>x.id===room?.floor_id),b=state.data.buildings.find(x=>x.id===f?.building_id);Object.assign(row,{room_name:room?.name,room_code:room?.code,floor_name:f?.name,building_name:b?.name,location_label:roomLocation(room_id)});if(id){Object.assign(state.data.students.find(x=>x.id===id),row);audit('تعديل','طالب',full);}else{row.id=uid();newStudentId=row.id;row.access_code=makeStudentCode();row.created_at=new Date().toISOString();state.data.students.unshift(row);audit('إضافة','طالب',full+' / '+row.access_code);}saveDemo();}
-    else{const data=await invokeSecureFunction('manage-student',{action:id?'update':'create',student_id:id||undefined,student:row});newStudentId=data?.student?.id||id||'';await loadSupabaseData();}
+    if(DEMO){
+      if(photoFile){const blob=await compressStudentPhoto(photoFile);row.photo_url=await blobToDataUrl(blob);row.photo_path='demo';}
+      const room=state.data.rooms.find(r=>r.id===room_id),f=state.data.floors.find(x=>x.id===room?.floor_id),b=state.data.buildings.find(x=>x.id===f?.building_id);Object.assign(row,{room_name:room?.name,room_code:room?.code,floor_name:f?.name,building_name:b?.name,location_label:roomLocation(room_id)});
+      if(id){Object.assign(state.data.students.find(x=>x.id===id),row);audit('تعديل','طالب',full);}else{row.id=uid();newStudentId=row.id;row.access_code=makeStudentCode();row.created_at=new Date().toISOString();state.data.students.unshift(row);audit('إضافة','طالب',full+' / '+row.access_code);}saveDemo();
+    }else{
+      const data=await invokeSecureFunction('manage-student',{action:id?'update':'create',student_id:id||undefined,student:row});newStudentId=data?.student?.id||id||'';
+      if(photoFile&&newStudentId){
+        row.photo_path=await uploadStudentPhoto(newStudentId,photoFile);
+        await invokeSecureFunction('manage-student',{action:'update',student_id:newStudentId,student:row});
+      }
+      await loadSupabaseData();
+    }
     closeModal();render();if(!id&&newStudentId)setTimeout(()=>showStudentQr(newStudentId),120);
   }catch(e){msg.innerHTML=`<div class="message error">${esc(authErrorArabic(e.message))}</div>`;}
 }
@@ -711,7 +788,7 @@ function page_attendance(){
   <div class="card"><div class="toolbar"><div class="row filters"><div class="field search"><label>بحث</label><input id="attSearch" placeholder="اسم الطالب أو الصف" oninput="filterAttendanceRoster()"></div><div class="field"><label>القسم</label><select id="attBuilding" onchange="filterAttendanceRoster()"><option value="">كل الأقسام</option>${bopts}</select></div><div class="field"><label>الشعبة</label><select id="attRoom" onchange="filterAttendanceRoster()"><option value="">كل الشعب</option>${(state.data.rooms||[]).filter(r=>state.role!=='teacher'||assignedRoomIds().includes(r.id)).map(r=>`<option value="${r.id}">${esc(roomLocation(r.id))}</option>`).join('')}</select></div></div><div class="hint">اختر الحالة ثم احفظ صف الطالب.</div></div><div id="attRoster">${attendanceTableHtml(roster,records,'','','')}</div></div>`;
 }
 function attendanceTableHtml(roster,records,q='',buildingId='',roomId=''){
-  q=q.toLowerCase(); const rows=roster.filter(s=>{const r=state.data.rooms?.find(x=>x.id===s.room_id),f=state.data.floors?.find(x=>x.id===r?.floor_id);return(!q||[s.full_name,s.grade,s.class_name,roomLocation(s.room_id)].some(v=>String(v||'').toLowerCase().includes(q)))&&(!buildingId||f?.building_id===buildingId)&&(!roomId||s.room_id===roomId)});
+  q=q.toLowerCase(); const rows=sortedByArabicName(roster.filter(s=>{const r=state.data.rooms?.find(x=>x.id===s.room_id),f=state.data.floors?.find(x=>x.id===r?.floor_id);return(!q||[s.full_name,s.grade,s.class_name,roomLocation(s.room_id)].some(v=>String(v||'').toLowerCase().includes(q)))&&(!buildingId||f?.building_id===buildingId)&&(!roomId||s.room_id===roomId)}));
   return `<div class="table-wrap"><table><thead><tr><th>الطالب</th><th>الصف</th><th>الموقع</th><th>الحالة</th><th>دقائق التأخير</th><th>ملاحظة</th><th>حفظ</th></tr></thead><tbody>${rows.map(s=>{const r=records.find(x=>x.student_id===s.id)||{};return `<tr><td><b>${esc(s.full_name)}</b></td><td>${esc(s.grade||'—')}</td><td>${esc(s.location_label||roomLocation(s.room_id))}</td><td><select id="st_${s.id}"><option ${r.status==='حاضر'?'selected':''}>حاضر</option><option ${r.status==='غائب'?'selected':''}>غائب</option><option ${r.status==='متأخر'?'selected':''}>متأخر</option></select></td><td><input id="min_${s.id}" type="number" min="0" value="${esc(r.late_minutes||0)}" style="width:85px"></td><td><input id="note_${s.id}" value="${esc(r.note||'')}" placeholder="اختياري"></td><td><button class="btn small" onclick="saveAttendanceRow('${s.id}')">حفظ</button></td></tr>`}).join('')||'<tr><td colspan="7" class="empty">لا يوجد طلاب ضمن هذا الاختيار</td></tr>'}</tbody></table></div>`;
 }
 function changeAttDate(v){state.attDate=v;render();}
@@ -759,7 +836,7 @@ function previewNoteImage(){
 }
 function openNoteModal(studentId=''){
   if(state.role==='teacher'&&!(state.data.students||[]).length){alert('لا يوجد طلاب ضمن الشعب المخصصة لك.');return;}
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="modal"><div class="modalbox"><div class="row between"><div><h2 class="section-title">إضافة ملاحظة على الطالب</h2><div class="muted">${state.role==='teacher'?'الملاحظة ستُرسل لولي أمر الطالب مباشرة، ويمكنك اختيار طلاب شعبك فقط.':'كل ملاحظة هنا تصل إلزامياً إلى بوابة ولي الأمر المرتبطة بكود الطالب وتُسجل كإشعار غير مقروء.'}</div></div><button class="btn outline" onclick="closeModal()">إغلاق</button></div><div id="modalMsg"></div><div class="mini-grid section"><div class="field"><label>الطالب *</label><select id="n_student" onchange="updateNoteStudentCode()">${state.data.students.map(st=>`<option value="${st.id}" ${studentId===st.id?'selected':''}>${esc(st.full_name)} — ${esc(st.access_code)}</option>`).join('')}</select></div><div class="field"><label>كود الطالب *</label><input id="n_code" readonly value="${esc((state.data.students.find(st=>st.id===(studentId||state.data.students[0]?.id))?.access_code)||'')}"></div><div class="field"><label>التصنيف</label><select id="n_category"><option>ملاحظة عامة</option><option>سلوك</option><option>دراسة</option><option>التزام</option><option>تميز</option><option>تنبيه</option><option>تكريم</option><option>شهادة</option></select></div><div class="field"><label>الأهمية</label><select id="n_importance"><option>عادي</option><option>مهم</option></select></div></div><div class="message ok">🔔 الإرسال لولي الأمر إجباري لهذه الملاحظات.</div><div class="field"><label>عنوان الملاحظة *</label><input id="n_title" placeholder="مثال: تكريم الطالب أو شهادة تقدير"></div><div class="field"><label>نص الملاحظة *</label><textarea id="n_content" placeholder="اكتب الملاحظة التي تريد أن تصل إلى ولي الأمر..."></textarea></div><div class="field"><label>صورة مرفقة (اختياري)</label><input id="n_image" type="file" accept="image/*" capture="environment" onchange="previewNoteImage()"><div class="hint">يمكنك تصوير شهادة/تكريم مباشرة أو اختيار صورة من الهاتف. الحد الأقصى 10 MB.</div><div id="n_image_preview"></div></div><button class="btn" onclick="saveStudentNote()">حفظ وإرسال لولي الأمر</button></div></div>`);
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="modal"><div class="modalbox"><div class="row between"><div><h2 class="section-title">إضافة ملاحظة على الطالب</h2><div class="muted">${state.role==='teacher'?'الملاحظة ستُرسل لولي أمر الطالب مباشرة، ويمكنك اختيار طلاب شعبك فقط.':'كل ملاحظة هنا تصل إلزامياً إلى بوابة ولي الأمر المرتبطة بكود الطالب وتُسجل كإشعار غير مقروء.'}</div></div><button class="btn outline" onclick="closeModal()">إغلاق</button></div><div id="modalMsg"></div><div class="mini-grid section"><div class="field"><label>الطالب *</label><select id="n_student" onchange="updateNoteStudentCode()">${sortedByArabicName(state.data.students).map(st=>`<option value="${st.id}" ${studentId===st.id?'selected':''}>${esc(st.full_name)} — ${esc(st.access_code)}</option>`).join('')}</select></div><div class="field"><label>كود الطالب *</label><input id="n_code" readonly value="${esc((state.data.students.find(st=>st.id===(studentId||state.data.students[0]?.id))?.access_code)||'')}"></div><div class="field"><label>التصنيف</label><select id="n_category"><option>ملاحظة عامة</option><option>سلوك</option><option>دراسة</option><option>التزام</option><option>تميز</option><option>تنبيه</option><option>تكريم</option><option>شهادة</option></select></div><div class="field"><label>الأهمية</label><select id="n_importance"><option>عادي</option><option>مهم</option></select></div></div><div class="message ok">🔔 الإرسال لولي الأمر إجباري لهذه الملاحظات.</div><div class="field"><label>عنوان الملاحظة *</label><input id="n_title" placeholder="مثال: تكريم الطالب أو شهادة تقدير"></div><div class="field"><label>نص الملاحظة *</label><textarea id="n_content" placeholder="اكتب الملاحظة التي تريد أن تصل إلى ولي الأمر..."></textarea></div><div class="field"><label>صورة مرفقة (اختياري)</label><input id="n_image" type="file" accept="image/*" capture="environment" onchange="previewNoteImage()"><div class="hint">يمكنك تصوير شهادة/تكريم مباشرة أو اختيار صورة من الهاتف. الحد الأقصى 10 MB.</div><div id="n_image_preview"></div></div><button class="btn" onclick="saveStudentNote()">حفظ وإرسال لولي الأمر</button></div></div>`);
 }
 async function uploadStudentNoteImage(student_id,file){
   if(!file)return '';
@@ -791,7 +868,7 @@ async function saveStudentNote(){
       const {data:note,error}=await sb.from('student_notes').insert({student_id,title,content,category,importance,image_path:image_path||null,image_url:null,visible_to_parent:true,created_by:state.user.id}).select().single();
       if(error)throw error;
       let pushMsg='';
-      try{const {data:push,error:pushError}=await sb.functions.invoke('send-parent-push',{body:{student_id,title:'مدرسة المنارة الخاصة',body:(title+' — '+content).slice(0,260),note_id:note?.id||''}});if(pushError)pushMsg='تم حفظ الملاحظة، لكن تعذر إرسال إشعار الهاتف.';else if(!push?.sent)pushMsg='تم حفظ الملاحظة، لكن لا يوجد جهاز ولي أمر مسجل للإشعارات بعد.';}catch(_){pushMsg='تم حفظ الملاحظة، لكن تعذر إرسال إشعار الهاتف.';}
+      try{const {data:push,error:pushError}=await sb.functions.invoke('send-parent-push',{body:{client_version:APP_VERSION,student_id,title:'مدرسة المنارة الخاصة',body:(title+' — '+content).slice(0,260),note_id:note?.id||''}});if(pushError)pushMsg='تم حفظ الملاحظة، لكن تعذر إرسال إشعار الهاتف.';else if(!push?.sent)pushMsg='تم حفظ الملاحظة، لكن لا يوجد جهاز ولي أمر مسجل للإشعارات بعد.';}catch(_){pushMsg='تم حفظ الملاحظة، لكن تعذر إرسال إشعار الهاتف.';}
       await loadSupabaseData();if(pushMsg)setTimeout(()=>alert(pushMsg),100);else setTimeout(()=>alert(image_path?'تم حفظ الملاحظة والصورة وإرسال إشعار لولي الأمر.':'تم حفظ الملاحظة وإرسال إشعار لولي الأمر.'),100);
     }
     closeModal();render();
@@ -803,7 +880,7 @@ function page_grades(){
   return `<div class="toolbar"><div><h2 class="section-title">النتائج والاختبارات</h2><div class="muted">صلاحية حصرية للإدارة.</div></div><button class="btn" onclick="openGradeModal()">+ إضافة نتيجة</button></div><div class="card"><div class="table-wrap"><table><thead><tr><th>الطالب</th><th>المادة</th><th>الاختبار</th><th>التاريخ</th><th>العلامة</th><th>إجراء</th></tr></thead><tbody>${gr.map(g=>`<tr><td>${esc(studentName(g.student_id))}</td><td>${esc(g.subject_name||g.subject||'')}</td><td>${esc(g.exam_name||g.exam||'')}</td><td>${esc(g.date||'—')}</td><td><b>${esc(g.score)}/${esc(g.max_score||g.max||100)}</b></td><td><button class="btn small danger" onclick="deleteGrade('${g.id}')">حذف</button></td></tr>`).join('')||'<tr><td colspan="6" class="empty">لا توجد نتائج</td></tr>'}</tbody></table></div></div>`;
 }
 function studentName(id){return state.data.students.find(s=>s.id===id)?.full_name||'—';}
-function openGradeModal(){document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="modal"><div class="modalbox"><div class="row between"><h2 class="section-title">إضافة نتيجة</h2><button class="btn outline" onclick="closeModal()">إغلاق</button></div><div id="modalMsg"></div><div class="mini-grid section"><div class="field"><label>الطالب</label><select id="g_student">${state.data.students.map(s=>`<option value="${s.id}">${esc(s.full_name)}</option>`).join('')}</select></div><div class="field"><label>المادة</label><select id="g_subject">${state.data.subjects.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></div><div class="field"><label>اسم الاختبار</label><input id="g_exam"></div><div class="field"><label>التاريخ</label><input id="g_date" type="date" value="${today()}"></div><div class="field"><label>العلامة</label><input id="g_score" type="number"></div><div class="field"><label>العلامة الكاملة</label><input id="g_max" type="number" value="100"></div></div><button class="btn" onclick="saveGrade()">حفظ النتيجة</button></div></div>`);}
+function openGradeModal(){document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="modal"><div class="modalbox"><div class="row between"><h2 class="section-title">إضافة نتيجة</h2><button class="btn outline" onclick="closeModal()">إغلاق</button></div><div id="modalMsg"></div><div class="mini-grid section"><div class="field"><label>الطالب</label><select id="g_student">${sortedByArabicName(state.data.students).map(s=>`<option value="${s.id}">${esc(s.full_name)}</option>`).join('')}</select></div><div class="field"><label>المادة</label><select id="g_subject">${state.data.subjects.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></div><div class="field"><label>اسم الاختبار</label><input id="g_exam"></div><div class="field"><label>التاريخ</label><input id="g_date" type="date" value="${today()}"></div><div class="field"><label>العلامة</label><input id="g_score" type="number"></div><div class="field"><label>العلامة الكاملة</label><input id="g_max" type="number" value="100"></div></div><button class="btn" onclick="saveGrade()">حفظ النتيجة</button></div></div>`);}
 async function saveGrade(){const student_id=document.getElementById('g_student').value,subjectId=document.getElementById('g_subject').value,exam=document.getElementById('g_exam').value.trim(),date=document.getElementById('g_date').value,score=Number(document.getElementById('g_score').value),max=Number(document.getElementById('g_max').value)||100,msg=document.getElementById('modalMsg');if(!student_id||!exam||Number.isNaN(score)){msg.innerHTML='<div class="message error">أكمل بيانات الاختبار والعلامة.</div>';return;}try{if(DEMO){const subject=state.data.subjects.find(s=>s.id===subjectId)?.name||'';state.data.grades.unshift({id:uid(),student_id,subject_id:subjectId,subject_name:subject,exam_name:exam,date,score,max_score:max,created_at:new Date().toISOString()});audit('إضافة','نتيجة',`${studentName(student_id)} / ${subject}`);saveDemo();}else{let {data:item,error:e1}=await sb.from('grade_items').insert({subject_id:subjectId,title:exam,max_score:max,exam_date:date}).select().single();if(e1)throw e1;let {error:e2}=await sb.from('grades').insert({student_id,grade_item_id:item.id,score});if(e2)throw e2;await loadSupabaseData();}closeModal();render();}catch(e){msg.innerHTML=`<div class="message error">${esc(e.message)}</div>`;}}
 async function deleteGrade(id){if(!confirm('حذف النتيجة؟'))return;if(DEMO){state.data.grades=state.data.grades.filter(x=>x.id!==id);audit('حذف','نتيجة',id);saveDemo();render();}else{const {error}=await sb.from('grades').delete().eq('id',id);if(error)return alert(error.message);await loadSupabaseData();render();}}
 
@@ -826,7 +903,7 @@ function teacherRoomCheckboxes(selected=[]){
 }
 function selectedTeacherRooms(){return [...document.querySelectorAll('input[name="teacher_room"]:checked')].map(x=>x.value);}
 function teacherTableHtml(q=''){
-  q=String(q||'').trim().toLowerCase();const list=(state.data.teachers||[]).filter(t=>!q||[t.full_name,t.email,t.username,t.id,assignedRoomsLabel(t.id)].some(v=>String(v||'').toLowerCase().includes(q)));
+  q=String(q||'').trim().toLowerCase();const list=sortedByArabicName((state.data.teachers||[]).filter(t=>!q||[t.full_name,t.email,t.username,t.id,assignedRoomsLabel(t.id)].some(v=>String(v||'').toLowerCase().includes(q))));
   return `<div class="table-wrap"><table><thead><tr><th>اسم الأستاذ</th><th>${DEMO?'اسم المستخدم':'الحساب'}</th><th>الشعب المخصصة</th><th>الصلاحية</th><th>الحالة</th><th>إجراء</th></tr></thead><tbody>${list.map(t=>`<tr><td><b>${esc(t.full_name)}</b></td><td>${esc(t.username||t.email||t.id)}</td><td><div class="assignment-list">${assignedRoomIds(t.id).map(id=>`<span class="badge active">${esc(roomLocation(id))}</span>`).join(' ')||'<span class="badge warning">لم تحدد شعب</span>'}</div></td><td><span class="badge teacher">طلاب + حضور + ملاحظات</span></td><td><span class="badge ${t.active===false?'inactive':'active'}">${t.active===false?'موقوف':'فعال'}</span></td><td><div class="row"><button class="btn small secondary" onclick="openTeacherEditModal('${t.id}')">تعديل</button><button class="btn small secondary" onclick="openTeacherPasswordModal('${t.id}')">كلمة السر</button><button class="btn small ${t.active===false?'secondary':'danger'}" onclick="toggleTeacher('${t.id}',${t.active===false?'true':'false'})">${t.active===false?'تفعيل':'إيقاف'}</button><button class="btn small danger" onclick="deleteTeacher('${t.id}')">حذف</button></div></td></tr>`).join('')||'<tr><td colspan="6" class="empty">لا يوجد مدرسون مطابقون للبحث</td></tr>'}</tbody></table></div>`;
 }
 function filterTeacherTable(){const el=document.getElementById('teacherTable');if(el)el.innerHTML=teacherTableHtml(document.getElementById('teacherSearch')?.value||'');applyMobileUi();}
@@ -835,7 +912,7 @@ function page_teachers(){
   return `<div class="toolbar"><div><h2 class="section-title">حسابات المدرسين وتوزيع الشعب</h2><div class="muted">ابحث بالاسم، وأدر الحسابات والشعب من مكان واحد.</div></div><button class="btn" onclick="openTeacherModal()">+ إضافة أستاذ</button></div><div class="role-note">كل العمليات الحساسة محمية بحساب الإدارة والتحقق بخطوتين.</div><div class="card section"><div class="toolbar"><div class="field search"><label>بحث عن أستاذ</label><input id="teacherSearch" placeholder="اكتب اسم الأستاذ..." oninput="filterTeacherTable()"></div><div class="hint">عدد المدرسين: <b>${(state.data.teachers||[]).length}</b></div></div><div id="teacherTable">${teacherTableHtml()}</div></div>`;
 }
 function openTeacherModal(){document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="modal"><div class="modalbox"><div class="row between"><div><h2 class="section-title">إضافة أستاذ</h2><div class="muted">يمكن اختيار أكثر من شعبة للأستاذ نفسه.</div></div><button class="btn outline" onclick="closeModal()">إغلاق</button></div><div id="modalMsg"></div><div class="mini-grid section"><div class="field"><label>اسم الأستاذ *</label><input id="t_name"></div><div class="field"><label>${DEMO?'اسم المستخدم *':'البريد الإلكتروني *'}</label><input id="t_login" inputmode="email"></div><div class="field"><label>كلمة المرور المؤقتة * (6 أحرف أو أرقام على الأقل)</label><input id="t_password" type="password" minlength="6"></div></div><div class="field"><label>الشعب المخصصة للأستاذ * — يمكنك اختيار أكثر من شعبة</label>${teacherRoomCheckboxes([])}</div><button class="btn" onclick="saveTeacher()">إنشاء الحساب وحفظ الشعب</button></div></div>`);}
-async function saveTeacher(){const full_name=document.getElementById('t_name').value.trim(),login=document.getElementById('t_login').value.trim(),password=document.getElementById('t_password').value,room_ids=selectedTeacherRooms(),msg=document.getElementById('modalMsg');if(!full_name||!login||!teacherPasswordValid(password)){msg.innerHTML='<div class="message error">أدخل الاسم والحساب وكلمة مرور من 6 أحرف أو أرقام على الأقل.</div>';return;}if(!room_ids.length){msg.innerHTML='<div class="message error">اختر شعبة واحدة على الأقل للأستاذ.</div>';return;}try{if(DEMO){if(state.data.teachers.some(x=>x.username===login))throw new Error('اسم المستخدم موجود مسبقاً.');const id=uid();state.data.teachers.unshift({id,full_name,username:login,password,active:true});room_ids.forEach(room_id=>state.data.teacherAssignments.push({teacher_id:id,room_id}));audit('إضافة','مدرس',full_name);saveDemo();}else{const {data,error}=await sb.functions.invoke('create-teacher',{body:{email:login,password,full_name,room_ids}});if(error){let detail=error.message||'تعذر تشغيل خدمة إنشاء المدرس.';try{const body=await error.context?.json();if(body?.error)detail=body.error;}catch(_){}if(/not found|404|function/i.test(detail))detail+=' تأكد من نشر Edge Function create-teacher في Supabase.';throw new Error(detail);}if(data?.error)throw new Error(data.error);await loadSupabaseData();}closeModal();render();}catch(e){msg.innerHTML=`<div class="message error">${esc(authErrorArabic(e.message))}</div>`;}}
+async function saveTeacher(){const full_name=document.getElementById('t_name').value.trim(),login=document.getElementById('t_login').value.trim(),password=document.getElementById('t_password').value,room_ids=selectedTeacherRooms(),msg=document.getElementById('modalMsg');if(!full_name||!login||!teacherPasswordValid(password)){msg.innerHTML='<div class="message error">أدخل الاسم والحساب وكلمة مرور من 6 أحرف أو أرقام على الأقل.</div>';return;}if(!room_ids.length){msg.innerHTML='<div class="message error">اختر شعبة واحدة على الأقل للأستاذ.</div>';return;}try{if(DEMO){if(state.data.teachers.some(x=>x.username===login))throw new Error('اسم المستخدم موجود مسبقاً.');const id=uid();state.data.teachers.unshift({id,full_name,username:login,password,active:true});room_ids.forEach(room_id=>state.data.teacherAssignments.push({teacher_id:id,room_id}));audit('إضافة','مدرس',full_name);saveDemo();}else{const {data,error}=await sb.functions.invoke('create-teacher',{body:{client_version:APP_VERSION,email:login,password,full_name,room_ids}});if(error){let detail=error.message||'تعذر تشغيل خدمة إنشاء المدرس.';try{const body=await error.context?.json();if(body?.error)detail=body.error;}catch(_){}if(/not found|404|function/i.test(detail))detail+=' تأكد من نشر Edge Function create-teacher في Supabase.';throw new Error(detail);}if(data?.error)throw new Error(data.error);await loadSupabaseData();}closeModal();render();}catch(e){msg.innerHTML=`<div class="message error">${esc(authErrorArabic(e.message))}</div>`;}}
 
 function openTeacherEditModal(id){
   const t=state.data.teachers.find(x=>x.id===id);if(!t)return;
@@ -848,7 +925,7 @@ async function saveTeacherEdit(id){
   if(!room_ids.length){msg.innerHTML='<div class="message error">اختر شعبة واحدة على الأقل للأستاذ.</div>';return;}
   try{
     if(DEMO){const t=state.data.teachers.find(x=>x.id===id);if(!t)throw new Error('الأستاذ غير موجود.');t.full_name=full_name;if(login)t.username=login;if(password)t.password=password;state.data.teacherAssignments=state.data.teacherAssignments.filter(x=>x.teacher_id!==id);room_ids.forEach(room_id=>state.data.teacherAssignments.push({teacher_id:id,room_id}));audit('تعديل','مدرس',full_name);saveDemo();}
-    else{const {data,error}=await sb.functions.invoke('manage-teacher',{body:{action:'update',teacher_id:id,full_name,email:login||undefined,password:password||undefined,room_ids}});if(error){let detail=error.message||'تعذر تعديل الأستاذ.';try{const body=await error.context?.json();if(body?.error)detail=body.error;}catch(_){}if(/not found|404|function/i.test(detail))detail+=' تأكد من نشر Edge Function manage-teacher في Supabase.';throw new Error(detail);}if(data?.error)throw new Error(data.error);await loadSupabaseData();}
+    else{const {data,error}=await sb.functions.invoke('manage-teacher',{body:{client_version:APP_VERSION,action:'update',teacher_id:id,full_name,email:login||undefined,password:password||undefined,room_ids}});if(error){let detail=error.message||'تعذر تعديل الأستاذ.';try{const body=await error.context?.json();if(body?.error)detail=body.error;}catch(_){}if(/not found|404|function/i.test(detail))detail+=' تأكد من نشر Edge Function manage-teacher في Supabase.';throw new Error(detail);}if(data?.error)throw new Error(data.error);await loadSupabaseData();}
     closeModal();render();
   }catch(e){msg.innerHTML=`<div class="message error">${esc(authErrorArabic(e.message))}</div>`;}
 }
@@ -863,7 +940,7 @@ async function saveTeacherPassword(id){
   const t=state.data.teachers.find(x=>x.id===id);if(!t)return;
   try{
     if(DEMO){t.password=p;saveDemo();}
-    else{const room_ids=assignedRoomIds(id);const {data,error}=await sb.functions.invoke('manage-teacher',{body:{action:'update',teacher_id:id,full_name:t.full_name,password:p,room_ids}});if(error){let detail=error.message||'تعذر تغيير كلمة المرور.';try{const body=await error.context?.json();if(body?.error)detail=body.error;}catch(_){}throw new Error(detail);}if(data?.error)throw new Error(data.error);}
+    else{const room_ids=assignedRoomIds(id);const {data,error}=await sb.functions.invoke('manage-teacher',{body:{client_version:APP_VERSION,action:'update',teacher_id:id,full_name:t.full_name,password:p,room_ids}});if(error){let detail=error.message||'تعذر تغيير كلمة المرور.';try{const body=await error.context?.json();if(body?.error)detail=body.error;}catch(_){}throw new Error(detail);}if(data?.error)throw new Error(data.error);}
     closeModal();alert('تم تغيير كلمة مرور الأستاذ بنجاح.');
   }catch(e){msg.innerHTML=`<div class="message error">${esc(authErrorArabic(e.message))}</div>`;}
 }
@@ -872,7 +949,7 @@ async function deleteTeacher(id){
   if(!confirm(`حذف الأستاذ ${t.full_name} نهائياً؟ سيتم حذف حساب دخوله وإزالة الشعب المخصصة له.`))return;
   try{
     if(DEMO){state.data.teachers=state.data.teachers.filter(x=>x.id!==id);state.data.teacherAssignments=state.data.teacherAssignments.filter(x=>x.teacher_id!==id);audit('حذف','مدرس',t.full_name);saveDemo();render();return;}
-    const {data,error}=await sb.functions.invoke('manage-teacher',{body:{action:'delete',teacher_id:id}});if(error){let detail=error.message||'تعذر حذف الأستاذ.';try{const body=await error.context?.json();if(body?.error)detail=body.error;}catch(_){}if(/not found|404|function/i.test(detail))detail+=' تأكد من نشر Edge Function manage-teacher في Supabase.';throw new Error(detail);}if(data?.error)throw new Error(data.error);await loadSupabaseData();render();alert('تم حذف الأستاذ بنجاح.');
+    const {data,error}=await sb.functions.invoke('manage-teacher',{body:{client_version:APP_VERSION,action:'delete',teacher_id:id}});if(error){let detail=error.message||'تعذر حذف الأستاذ.';try{const body=await error.context?.json();if(body?.error)detail=body.error;}catch(_){}if(/not found|404|function/i.test(detail))detail+=' تأكد من نشر Edge Function manage-teacher في Supabase.';throw new Error(detail);}if(data?.error)throw new Error(data.error);await loadSupabaseData();render();alert('تم حذف الأستاذ بنجاح.');
   }catch(e){alert(authErrorArabic(e.message));}
 }
 function openTeacherRoomsModal(id){const t=state.data.teachers.find(x=>x.id===id);if(!t)return;document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="modal"><div class="modalbox"><div class="row between"><div><h2 class="section-title">تعديل شعب الأستاذ</h2><div class="muted">${esc(t.full_name)} — الإدارة فقط تستطيع تعديل هذه الشعب.</div></div><button class="btn outline" onclick="closeModal()">إغلاق</button></div><div id="modalMsg"></div><div class="field section">${teacherRoomCheckboxes(assignedRoomIds(id))}</div><button class="btn" onclick="saveTeacherRooms('${id}')">حفظ الشعب وإقفال التوزيع</button></div></div>`);}
