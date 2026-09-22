@@ -1,15 +1,15 @@
-const CACHE='manara-ios-v6100';
+const CACHE='manara-ios-v6110';
 const FILES=[
-  './ios-app.html?v=6100',
-  './ios-style.css?v=6100',
-  './ios-supabase.js?v=6100',
-  './ios-config.js?v=6100',
-  './ios-app.js?v=6100',
-  './ios-manifest.webmanifest?v=6100',
-  './logo.jpg?v=6100',
-  './apple-touch-icon.png?v=6100',
-  './icon-192.png?v=6100',
-  './icon-512.png?v=6100'
+  './ios-app.html?v=6110',
+  './ios-style.css?v=6110',
+  './ios-supabase.js?v=6110',
+  './ios-config.js?v=6110',
+  './ios-app.js?v=6110',
+  './ios-manifest.webmanifest?v=6110',
+  './logo.jpg?v=6110',
+  './apple-touch-icon.png?v=6110',
+  './icon-192.png?v=6110',
+  './icon-512.png?v=6110'
 ];
 
 self.addEventListener('install', event => {
