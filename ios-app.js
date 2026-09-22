@@ -7,8 +7,8 @@ const LOGIN_REMEMBER_KEY = 'almanara_login_remember';
 const PARENT_CODE_KEY = 'manara_parent_saved_code';
 const FCM_TOKEN_KEY = 'manara_fcm_token';
 const PUBLIC_PARENT_PORTAL_URL = 'https://abdoali07979-collab.github.io/manara-school/';
-const APP_VERSION_CODE = 13;
-const APP_VERSION_LABEL = '6.9';
+const APP_VERSION_CODE = 14;
+const APP_VERSION_LABEL = '6.10';
 const UPDATE_CACHE_KEY = 'manara_android_update_config_v1';
 let sb = null;
 let state = { screen:'parent', user:null, role:null, tab:'home', portal:null, data:null, sidebar:false, loginNotice:'', portalPoll:null, pendingAuthUser:null, pendingAuthProfile:null, mfaEnroll:null };
@@ -1150,3 +1150,169 @@ async function init(){
 }
 
 init();
+
+
+/* ============================================================
+   MANARA V6.10 — الصفوف والشعب كمجلدات + الصورة الشخصية للطالب
+   ============================================================ */
+
+function navItems(){
+  if(state.role==='teacher') return [
+    ['home','⌂','الرئيسية'],
+    ['buildings','▦','الصفوف والشعب'],
+    ['students','♟','طلابي'],
+    ['attendance','✓','الحضور والغياب'],
+    ['reports','▥','الجرد الشهري'],
+    ['notes','✎','ملاحظات الطلاب']
+  ];
+  return [
+    ['home','⌂','الرئيسية'],
+    ['buildings','▦','الصفوف والشعب'],
+    ['students','♟','الطلاب'],
+    ['attendance','✓','الحضور والغياب'],
+    ['reports','▥','الجرد الشهري'],
+    ['archive','▧','الأرشيف السنوي'],
+    ['notes','✎','ملاحظات الطلاب'],
+    ['grades','▤','النتائج'],
+    ['announcements','◉','الإعلانات'],
+    ['teachers','♙','المدرسون'],
+    ['audit','≡','سجل العمليات'],
+    ['settings','⚙','الإعدادات']
+  ];
+}
+
+function appPage(){
+  const labels={home:'الرئيسية',buildings:'الصفوف والشعب',students:'الطلاب',attendance:'الحضور والغياب',reports:'الجرد الشهري',archive:'الأرشيف السنوي',notes:'ملاحظات الطلاب',grades:'النتائج',announcements:'الإعلانات',teachers:'إدارة المدرسين',audit:'سجل العمليات',settings:'الإعدادات'};
+  if(state.role==='teacher'&&!['home','buildings','students','attendance','reports','notes'].includes(state.tab))state.tab='home';
+  const topLogo=logo().replace('<img','<img class="top-logo"');
+  const watermark=logo().replace('<img','<img class="content-watermark"');
+  return `<div class="app-shell"><aside class="sidebar ${state.sidebar?'open':''}"><div class="side-brand">${logo()}<div><b>${esc(state.data?.settings?.school_name||'مدرسة المنارة الخاصة')}</b><small>MANARA PRIVATE SCHOOL</small></div><button class="drawer-close" onclick="toggleSidebar(false)" aria-label="إغلاق">×</button></div><div class="user-card"><b>${esc(state.user?.name||'')}</b><small>${state.role==='admin'?'مدير النظام — تحكم كامل':'مدرس — الشعب المخصصة فقط'}</small></div><div class="side-label">القائمة الرئيسية</div><nav class="side-nav">${navItems().map(n=>`<button class="${state.tab===n[0]?'active':''}" onclick="setTab('${n[0]}')"><i class="nav-icon">${n[1]}</i>${n[2]}</button>`).join('')}</nav><div class="side-label" style="margin-top:16px">الحساب</div><nav class="side-nav"><button onclick="goParent()"><i class="nav-icon">◫</i>معاينة بوابة الأهل</button><button onclick="logout()"><i class="nav-icon">↪</i>تسجيل الخروج</button></nav></aside><div class="drawer-backdrop ${state.sidebar?'show':''}" onclick="toggleSidebar(false)"></div>
+  <main class="main"><header class="topbar"><div class="row"><button class="btn outline mobile-menu" onclick="toggleSidebar()">☰</button><div class="page-title"><b>${labels[state.tab]||''}</b><small>${state.role==='admin'?'لوحة الإدارة الرئيسية':'طلابك وشعبك فقط'}</small></div></div>${topLogo}<div class="top-actions"><span class="badge ${state.role}">${state.role==='admin'?'الإدارة':'مدرس'}</span></div></header><section class="content">${watermark}${pageContent()}</section></main></div>`;
+}
+
+function v610VisibleRooms(){
+  let rooms=(state.data.rooms||[]).slice();
+  if(state.role==='teacher'){
+    const allowed=new Set(assignedRoomIds().map(String));
+    rooms=rooms.filter(r=>allowed.has(String(r.id)));
+  }
+  return rooms.sort((a,b)=>String(a.grade||'').localeCompare(String(b.grade||''),'ar',{numeric:true})||String(a.section_label||a.name||'').localeCompare(String(b.section_label||b.name||''),'ar',{numeric:true}));
+}
+function v610RoomBuildingName(room){
+  const f=(state.data.floors||[]).find(x=>String(x.id)===String(room?.floor_id));
+  const b=(state.data.buildings||[]).find(x=>String(x.id)===String(f?.building_id));
+  return b?.name||'';
+}
+function v610StudentsInRoom(roomId){
+  return (state.data.students||[]).filter(st=>String(st.room_id)===String(roomId)).sort((a,b)=>String(a.full_name||'').localeCompare(String(b.full_name||''),'ar'));
+}
+function page_buildings(){
+  if(!['admin','teacher'].includes(state.role))return noAccess();
+  const rooms=v610VisibleRooms();
+  const groups=[];
+  for(const r of rooms){
+    const g=String(r.grade||'غير محدد');
+    let group=groups.find(x=>x.grade===g);
+    if(!group){group={grade:g,rooms:[]};groups.push(group);}
+    group.rooms.push(r);
+  }
+  const content=groups.map(g=>`<div class="section"><div class="row between" style="margin-bottom:10px"><h3 class="section-title" style="margin:0">${esc(g.grade)}</h3><span class="badge active">${g.rooms.reduce((n,r)=>n+v610StudentsInRoom(r.id).length,0)} طالب</span></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(235px,1fr));gap:14px">${g.rooms.map(r=>{const students=v610StudentsInRoom(r.id),building=v610RoomBuildingName(r),teachers=v68TeacherNamesForRoom(r.id);return `<div class="card" style="position:relative;border:1px solid #dfe8e2;overflow:hidden"><button onclick="openClassFolder('${r.id}')" style="width:100%;border:0;background:transparent;text-align:right;padding:0;cursor:pointer;color:inherit"><div style="display:flex;align-items:center;gap:12px"><div style="font-size:42px;line-height:1">📁</div><div style="min-width:0"><b style="font-size:17px;display:block">${esc(r.grade||'—')} — ${esc(r.section_label||r.name||'شعبة')}</b><div class="muted" style="margin-top:4px">${esc(building||'')} ${building?'• ':''}${students.length} طالب</div></div></div><div class="hint" style="margin-top:12px">اضغط لفتح المجلد ومشاهدة الطلاب ومعلوماتهم</div></button>${teachers.length?`<div style="margin-top:10px">${teachers.map(n=>`<span class="badge teacher" style="margin:2px">${esc(n)}</span>`).join('')}</div>`:''}${state.role==='admin'?`<div class="row" style="margin-top:12px"><button class="btn small secondary" onclick="openRoomModal('${r.id}')">تعديل الشعبة</button></div>`:''}</div>`}).join('')}</div></div>`).join('');
+  return `<div class="toolbar"><div><h2 class="section-title">الصفوف والشعب</h2><div class="muted">كل صف وشعبة موجودان كمجلد مستقل. افتح أي مجلد لترى جميع الطلاب المسجلين فيه ومعلوماتهم.</div></div>${state.role==='admin'?'<button class="btn" onclick="openRoomModal()">+ إضافة صف / شعبة</button>':''}</div>${state.role==='teacher'?`<div class="role-note">تظهر لك فقط الشعب المخصصة لحسابك: <b>${assignedRoomsLabel(state.user.id)}</b></div>`:''}${content||'<div class="card empty">لا توجد صفوف أو شعب متاحة.</div>'}`;
+}
+
+function v610StudentAvatarHtml(st){
+  const initial=esc((st.full_name||'ط').trim().charAt(0)||'ط');
+  return `<div style="width:64px;height:64px;flex:0 0 64px;border-radius:50%;overflow:hidden;background:#e8f1ec;display:grid;place-items:center;font-size:25px;font-weight:800;color:#0b6b3a"><span id="v610_initial_${st.id}">${initial}</span><img id="v610_photo_${st.id}" alt="صورة الطالب" style="display:none;width:100%;height:100%;object-fit:cover"></div>`;
+}
+function v610StudentInfoCard(st){
+  const actions=`<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:12px"><button class="btn small secondary" onclick="v610FolderAction('edit','${st.id}')">تعديل</button>${state.role==='admin'?`<button class="btn small warning" onclick="v610FolderAction('move','${st.id}')">نقل / ترقية</button>`:''}<button class="btn small secondary" onclick="v610FolderAction('qr','${st.id}')">QR</button><button class="btn small" onclick="v610FolderAction('report','${st.id}')">تقرير PDF</button><button class="btn small" onclick="v610FolderAction('note','${st.id}')">ملاحظة</button></div>`;
+  return `<div class="card" style="margin-bottom:12px"><div style="display:flex;gap:12px;align-items:flex-start">${v610StudentAvatarHtml(st)}<div style="flex:1;min-width:0"><div class="row between" style="align-items:flex-start;gap:10px"><div><b style="font-size:17px">${esc(st.full_name||'—')}</b><div class="hint">${esc(st.access_code||'—')}</div></div><span class="badge ${st.active===false?'inactive':'active'}">${st.active===false?'موقوف':'فعال'}</span></div><div class="mini-grid" style="margin-top:12px"><div><b>اسم الأب:</b> ${esc(st.father_name||'—')}</div><div><b>اسم الأم:</b> ${esc(st.mother_name||'—')}</div><div><b>اسم الجد:</b> ${esc(st.grandfather_name||'—')}</div><div><b>تاريخ الميلاد:</b> ${esc(st.date_of_birth||'—')}</div><div><b>ولي الأمر:</b> ${esc(st.parent_phone||'—')}</div><div><b>العنوان:</b> ${esc(st.address||'—')}</div><div><b>رقم السيارة:</b> ${esc(st.transport_car_number||'—')}</div><div><b>الصورة الشخصية:</b> ${st.photo_path?'محفوظة ✓':'غير مضافة'}</div></div>${st.notes?`<div class="hint" style="margin-top:9px"><b>ملاحظة:</b> ${esc(st.notes)}</div>`:''}${actions}</div></div></div>`;
+}
+function openClassFolder(roomId){
+  const room=v610VisibleRooms().find(r=>String(r.id)===String(roomId));
+  if(!room)return alert('هذه الشعبة غير متاحة لحسابك.');
+  const students=v610StudentsInRoom(roomId),building=v610RoomBuildingName(room);
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="modal"><div class="modalbox" style="max-width:1050px"><div class="row between"><div><h2 class="section-title">📁 ${esc(room.grade||'—')} — ${esc(room.section_label||room.name||'شعبة')}</h2><div class="muted">${esc(building)}${building?' — ':''}${students.length} طالب مسجل</div></div><button class="btn outline" onclick="closeModal()">إغلاق</button></div><div class="section">${students.map(v610StudentInfoCard).join('')||'<div class="empty">لا يوجد طلاب داخل هذه الشعبة حالياً.</div>'}</div></div></div>`);
+  if(students.some(s=>s.photo_path))setTimeout(()=>v610LoadFolderPhotos(roomId),30);
+}
+function v610FolderAction(action,id){
+  closeModal();
+  setTimeout(()=>{
+    if(action==='edit')openStudentModal(id);
+    else if(action==='move')openMoveStudentModal(id);
+    else if(action==='qr')showStudentQr(id);
+    else if(action==='report')openStudentReport(id);
+    else if(action==='note')openNoteModal(id);
+  },40);
+}
+async function v610LoadFolderPhotos(roomId){
+  if(DEMO)return;
+  const ids=v610StudentsInRoom(roomId).filter(s=>s.photo_path).map(s=>s.id);
+  if(!ids.length)return;
+  try{
+    const data=await invokeSecureFunction('manage-student',{action:'photo_urls',student_ids:ids});
+    const urls=data?.urls||{};
+    Object.entries(urls).forEach(([id,url])=>{
+      const img=document.getElementById(`v610_photo_${id}`),initial=document.getElementById(`v610_initial_${id}`);
+      if(img&&url){img.src=String(url);img.style.display='block';if(initial)initial.style.display='none';}
+    });
+  }catch(_){}
+}
+
+function openStudentModal(id=''){
+  const st=state.data.students.find(x=>x.id===id)||{},teacher=state.role==='teacher',pp=v68PhoneParts(st.parent_phone||'');
+  if(teacher&&assignedRoomIds().length===0){alert('لا توجد شعبة مخصصة لحسابك بعد.');return;}
+  const codes=`<datalist id="countryCodes">${V68_COUNTRY_CODES.map(x=>`<option value="${x[0]}">${esc(x[1])}</option>`).join('')}</datalist>`;
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="modal"><div class="modalbox"><div class="row between"><div><h2 class="section-title">${id?'تعديل ملف الطالب':'تسجيل طالب جديد'}</h2><div class="muted">الصورة الشخصية اختيارية، واسم الجد اختياري، ورقم ولي الأمر يدعم النداء الدولي.</div></div><button class="btn outline" onclick="closeModal()">إغلاق</button></div><div id="modalMsg"></div>
+  <div class="section"><h3 class="section-title">الصورة الشخصية — اختيارية</h3><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><div id="s_photo_preview" style="width:96px;height:96px;border-radius:50%;background:#eef4f0;display:grid;place-items:center;overflow:hidden;font-size:34px;font-weight:800;color:#0b6b3a">${esc((st.full_name||'ط').charAt(0)||'ط')}</div><div style="flex:1;min-width:220px"><div class="field"><label>اختر صورة الطالب</label><input id="s_photo" type="file" accept="image/*" onchange="previewStudentPhoto()"><div class="hint">اختياري — سيتم تصغير الصورة تلقائياً قبل الحفظ.</div></div>${st.photo_path?'<label style="display:flex;align-items:center;gap:8px;margin-top:6px"><input id="s_remove_photo" type="checkbox" style="width:19px;height:19px"> حذف الصورة الحالية</label>':''}</div></div></div>
+  <div class="section"><h3 class="section-title">المعلومات الشخصية</h3><div class="mini-grid"><div class="field"><label>اسم الطالب الكامل *</label><input id="s_full" value="${esc(st.full_name||'')}"></div><div class="field"><label>اسم الأب</label><input id="s_father" value="${esc(st.father_name||'')}"></div><div class="field"><label>اسم الأم الكامل</label><input id="s_mother" value="${esc(st.mother_name||'')}"></div><div class="field"><label>اسم الجد — اختياري</label><input id="s_grand" value="${esc(st.grandfather_name||'')}" placeholder="اختياري"></div><div class="field"><label>تاريخ الميلاد</label><input id="s_birth" type="date" value="${esc(st.date_of_birth||'')}"></div><div class="field"><label>الجنس</label><select id="s_gender"><option value="">—</option><option ${st.gender==='ذكر'?'selected':''}>ذكر</option><option ${st.gender==='أنثى'?'selected':''}>أنثى</option></select></div></div></div>
+  <div class="section"><h3 class="section-title">معلومات الشعبة</h3><div class="mini-grid"><div class="field"><label>الصف *</label><input id="s_grade" value="${esc(st.grade||'')}" readonly></div><div class="field"><label>الشعبة *</label><input id="s_class" value="${esc(st.class_name||'')}" readonly></div><div class="field"><label>اختيار الصف والشعبة *</label><select id="s_room" onchange="syncStudentRoom()">${roomOptions(st.room_id||'')}</select></div></div></div>
+  <div class="section"><h3 class="section-title">معلومات الاتصال</h3><div class="mini-grid"><div class="field"><label>النداء الدولي</label><input id="s_country_code" list="countryCodes" inputmode="tel" value="${esc(pp.code)}" placeholder="+963">${codes}<div class="hint">يمكن كتابة أي نداء دولي حتى لو لم يظهر بالقائمة.</div></div><div class="field"><label>رقم هاتف ولي الأمر</label><input id="s_phone" inputmode="tel" value="${esc(pp.number)}" placeholder="مثال: 9XXXXXXXX"></div><div class="field"><label>العنوان</label><input id="s_address" value="${esc(st.address||'')}"></div><div class="field"><label>الحالة</label><select id="s_active"><option value="true" ${st.active!==false?'selected':''}>فعال</option><option value="false" ${st.active===false?'selected':''}>موقوف</option></select></div></div></div>
+  <div class="section"><h3 class="section-title">المواصلات</h3><div class="mini-grid"><div class="field"><label>رقم السيارة — اختياري</label><input id="s_transport" value="${esc(st.transport_car_number||'')}" placeholder="اختياري"></div></div></div><div class="field"><label>ملاحظة</label><textarea id="s_notes">${esc(st.notes||'')}</textarea></div><button class="btn" onclick="saveStudent('${id}')">${id?'حفظ التعديلات':'حفظ وإنشاء كود الطالب'}</button></div></div>`);
+  if(id&&st.photo_path&&!DEMO)setTimeout(()=>v610LoadStudentPhotoPreview(id),30);
+}
+function previewStudentPhoto(){
+  const file=document.getElementById('s_photo')?.files?.[0],box=document.getElementById('s_photo_preview');
+  if(!file||!box)return;
+  if(!String(file.type||'').startsWith('image/')){alert('اختر ملف صورة فقط.');return;}
+  const r=new FileReader();r.onload=()=>{box.innerHTML=`<img src="${r.result}" alt="معاينة" style="width:100%;height:100%;object-fit:cover">`;};r.readAsDataURL(file);
+}
+async function v610LoadStudentPhotoPreview(id){
+  try{
+    const data=await invokeSecureFunction('manage-student',{action:'photo_urls',student_ids:[id]});
+    const url=data?.urls?.[id],box=document.getElementById('s_photo_preview');
+    if(url&&box)box.innerHTML=`<img src="${esc(url)}" alt="صورة الطالب" style="width:100%;height:100%;object-fit:cover">`;
+  }catch(_){}
+}
+function v610CompressPhoto(file){
+  return new Promise((resolve,reject)=>{
+    if(!file){resolve('');return;}
+    if(!String(file.type||'').startsWith('image/')){reject(new Error('الصورة الشخصية يجب أن تكون ملف صورة.'));return;}
+    if(file.size>12*1024*1024){reject(new Error('حجم الصورة كبير جداً. اختر صورة أصغر من 12 MB.'));return;}
+    const reader=new FileReader();
+    reader.onerror=()=>reject(new Error('تعذر قراءة الصورة.'));
+    reader.onload=()=>{const img=new Image();img.onerror=()=>reject(new Error('تعذر فتح الصورة المختارة.'));img.onload=()=>{try{const max=1200,scale=Math.min(1,max/Math.max(img.naturalWidth||img.width,img.naturalHeight||img.height)),w=Math.max(1,Math.round((img.naturalWidth||img.width)*scale)),h=Math.max(1,Math.round((img.naturalHeight||img.height)*scale)),canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;const ctx=canvas.getContext('2d');ctx.drawImage(img,0,0,w,h);resolve(canvas.toDataURL('image/jpeg',0.82));}catch(e){reject(e);}};img.src=String(reader.result||'');};
+    reader.readAsDataURL(file);
+  });
+}
+async function saveStudent(id=''){
+  const msg=document.getElementById('modalMsg');let newStudentId='';
+  const full=document.getElementById('s_full').value.trim(),grand=document.getElementById('s_grand').value.trim(),grade=document.getElementById('s_grade').value.trim(),room_id=document.getElementById('s_room').value||null;
+  if(!full||!grade||!room_id){msg.innerHTML='<div class="message error">اسم الطالب والصف والشعبة حقول إلزامية. اسم الجد والصورة الشخصية اختياريان.</div>';return;}
+  if(state.role==='teacher'&&!assignedRoomIds().map(String).includes(String(room_id))){msg.innerHTML='<div class="message error">لا يمكنك إضافة طالب إلى شعبة غير مخصصة لك.</div>';return;}
+  const row={full_name:full,father_name:document.getElementById('s_father').value.trim(),mother_name:document.getElementById('s_mother').value.trim(),grandfather_name:grand,grade,class_name:document.getElementById('s_class').value.trim(),room_id,gender:document.getElementById('s_gender').value,date_of_birth:document.getElementById('s_birth').value||null,parent_phone:v68JoinPhone(document.getElementById('s_country_code').value,document.getElementById('s_phone').value),address:document.getElementById('s_address').value.trim(),active:document.getElementById('s_active')?.value!=='false',transport_car_number:document.getElementById('s_transport').value.trim(),notes:document.getElementById('s_notes')?.value.trim()||''};
+  const dup=duplicateStudentLocal(row,id);if(!id&&dup){msg.innerHTML='<div class="message error"><b>الطالب موجود مسبقاً.</b></div>';return;}
+  const photoFile=document.getElementById('s_photo')?.files?.[0]||null,removePhoto=!!document.getElementById('s_remove_photo')?.checked;
+  try{
+    let photoBase64='';if(photoFile){msg.innerHTML='<div class="message">جاري تجهيز الصورة الشخصية...</div>';photoBase64=await v610CompressPhoto(photoFile);}
+    if(DEMO){const room=state.data.rooms.find(r=>r.id===room_id),f=state.data.floors.find(x=>x.id===room?.floor_id),b=state.data.buildings.find(x=>x.id===f?.building_id);Object.assign(row,{room_name:room?.name,room_code:room?.code,floor_name:f?.name,building_name:b?.name,location_label:roomLocation(room_id)});if(id){Object.assign(state.data.students.find(x=>x.id===id),row);if(removePhoto)state.data.students.find(x=>x.id===id).photo_path='';}else{row.id=uid();newStudentId=row.id;row.access_code=makeStudentCode();row.created_at=new Date().toISOString();row.photo_path=photoBase64?'demo-photo':'';state.data.students.unshift(row);}saveDemo();}
+    else{
+      msg.innerHTML='<div class="message">جاري حفظ بيانات الطالب...</div>';
+      const data=await invokeSecureFunction('manage-student',{action:id?'update':'create',student_id:id||undefined,student:row});newStudentId=data?.student?.id||id||'';
+      if(removePhoto&&!photoBase64&&newStudentId)await invokeSecureFunction('manage-student',{action:'remove_photo',student_id:newStudentId});
+      if(photoBase64&&newStudentId){msg.innerHTML='<div class="message">جاري رفع الصورة الشخصية...</div>';await invokeSecureFunction('manage-student',{action:'upload_photo',student_id:newStudentId,image_base64:photoBase64});}
+      await loadSupabaseData();
+    }
+    closeModal();render();if(!id&&newStudentId)setTimeout(()=>showStudentQr(newStudentId),120);
+  }catch(e){msg.innerHTML=`<div class="message error">${esc(authErrorArabic(e.message))}</div>`;}
+}
