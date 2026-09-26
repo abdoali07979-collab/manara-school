@@ -7,8 +7,8 @@ const LOGIN_REMEMBER_KEY = 'almanara_login_remember';
 const PARENT_CODE_KEY = 'manara_parent_saved_code';
 const FCM_TOKEN_KEY = 'manara_fcm_token';
 const PUBLIC_PARENT_PORTAL_URL = 'https://abdoali07979-collab.github.io/manara-school/';
-const APP_VERSION_CODE = 15;
-const APP_VERSION_LABEL = '6.11';
+const APP_VERSION_CODE = 16;
+const APP_VERSION_LABEL = '6.12';
 const UPDATE_CACHE_KEY = 'manara_android_update_config_v1';
 let sb = null;
 let state = { screen:'parent', user:null, role:null, tab:'home', portal:null, data:null, sidebar:false, loginNotice:'', portalPoll:null, pendingAuthUser:null, pendingAuthProfile:null, mfaEnroll:null };
@@ -21,7 +21,7 @@ function makeStudentCode(){
 }
 function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));}
 function today(){return new Date().toISOString().slice(0,10);}
-function logo(){return `<img src="logo.jpg" alt="شعار مدرسة المنارة">`;}
+function logo(){return `<img src="assets/logo.jpg" alt="شعار مدرسة المنارة">`;}
 function moneyLike(n){return Number(n||0).toLocaleString('ar');}
 function statusBadge(s){const cls=s==='حاضر'?'present':s==='غائب'?'absent':'late'; return `<span class="badge ${cls}">${esc(s)}</span>`;}
 
@@ -237,7 +237,7 @@ function render(){
 function renderDesignerCredit(){
   const app=document.getElementById('app');if(!app)return;
   document.getElementById('manaraDesignerCredit')?.remove();
-  app.insertAdjacentHTML('beforeend',`<div id="manaraDesignerCredit" style="position:fixed;left:8px;bottom:calc(env(safe-area-inset-bottom, 0px) + 6px);z-index:9999;font-size:10px;line-height:1.2;color:#365047;background:rgba(255,255,255,.78);border:1px solid rgba(11,107,58,.12);border-radius:8px;padding:4px 7px;box-shadow:0 2px 8px #0001;pointer-events:none;opacity:.78">تصميم التطبيق: الأستاذ عبد الغني العلي</div>`);
+  app.insertAdjacentHTML('beforeend',`<div id="manaraDesignerCredit" style="position:fixed;left:8px;bottom:calc(env(safe-area-inset-bottom, 0px) + 6px);z-index:9999;font-size:10px;line-height:1.2;color:#365047;background:rgba(255,255,255,.78);border:1px solid rgba(11,107,58,.12);border-radius:8px;padding:4px 7px;box-shadow:0 2px 8px #0001;pointer-events:none;opacity:.78">المصمم الأستاذ عبد الغني العلي</div>`);
 }
 function applyMobileUi(){
   document.querySelectorAll('.table-wrap table').forEach(table=>{
@@ -381,7 +381,7 @@ async function enableParentNotifications(){
 }
 function notifyParentDevice(items){
   if(!items?.length || !('Notification' in window) || Notification.permission!=='granted')return;
-  const n=items[0]; try{new Notification(n.title||'مدرسة المنارة',{body:n.body||'لديك ملاحظة جديدة تخص الطالب.',icon:'logo.jpg'});}catch(e){}
+  const n=items[0]; try{new Notification(n.title||'مدرسة المنارة',{body:n.body||'لديك ملاحظة جديدة تخص الطالب.',icon:'assets/logo.jpg'});}catch(e){}
 }
 async function markPortalNotificationsSeen(){
   if(!state.portal?.student)return;
@@ -536,9 +536,11 @@ async function loadSupabaseData(){
     const students=(st.data||[]).map(x=>({...x,room_name:x.rooms?.name,room_code:x.rooms?.code,floor_name:x.rooms?.floors?.name,building_name:x.rooms?.floors?.buildings?.name,location_label:x.rooms?`${x.rooms?.floors?.buildings?.name||''} / ${x.rooms?.name||''}`:''}));
     state.data={students,attendance:at.data||[],grades:(gr.data||[]).map(x=>({...x,exam_name:x.grade_items?.title,max_score:x.grade_items?.max_score,date:x.grade_items?.exam_date,subject_name:x.grade_items?.subjects?.name})),announcements:an.data||[],subjects:su.data||[],teachers:pr.data||[],settings:se.data||{},audit:au.data||[],buildings:bu.data||[],floors:fl.data||[],rooms:ro.data||[],studentNotes:await hydrateNoteImages(sn.data||[]),notifications:pn.data||[],teacherAssignments:ta.data||[]};
   }else{
-    const [st,at,se,bu,fl,ro,sn,ta]=await Promise.all([
+    const [st,at,gr,su,se,bu,fl,ro,sn,ta]=await Promise.all([
       sb.from('students').select('*,rooms(id,code,name,grade,section_label,floor_id,floors(name,building_id,buildings(name)))').order('created_at',{ascending:false}),
       sb.from('attendance').select('*').order('date',{ascending:false}).limit(2000),
+      sb.from('grades').select('*,grade_items(title,max_score,exam_date,subjects(name))').order('created_at',{ascending:false}).limit(2000),
+      sb.from('subjects').select('*').order('name'),
       sb.from('school_settings').select('*').limit(1).maybeSingle(),
       sb.from('buildings').select('*').order('code'),
       sb.from('floors').select('*').order('floor_order'),
@@ -547,13 +549,15 @@ async function loadSupabaseData(){
       sb.from('teacher_room_assignments').select('*').eq('teacher_id',state.user.id)
     ]);
     const teacherAssignments=ta.data||[];
-    const allowedRooms=new Set(teacherAssignments.map(x=>x.room_id));
-    const students=(st.data||[]).map(x=>({...x,room_name:x.rooms?.name,room_code:x.rooms?.code,floor_name:x.rooms?.floors?.name,building_name:x.rooms?.floors?.buildings?.name,location_label:x.rooms?`${x.rooms?.floors?.buildings?.name||''} / ${x.rooms?.name||''}`:''})).filter(x=>allowedRooms.has(x.room_id));
-    const allowedStudentIds=new Set(students.map(x=>x.id));
-    const attendance=(at.data||[]).filter(x=>allowedStudentIds.has(x.student_id));
-    const teacherNotes=(sn.data||[]).filter(x=>allowedStudentIds.has(x.student_id));
-    state.data={students,attendance,grades:[],announcements:[],subjects:[],teachers:[],settings:se.data||{},audit:[],buildings:bu.data||[],floors:fl.data||[],rooms:ro.data||[],studentNotes:await hydrateNoteImages(teacherNotes),notifications:[],teacherAssignments};
+    const allowedRooms=new Set(teacherAssignments.map(x=>String(x.room_id)));
+    const students=(st.data||[]).map(x=>({...x,room_name:x.rooms?.name,room_code:x.rooms?.code,floor_name:x.rooms?.floors?.name,building_name:x.rooms?.floors?.buildings?.name,location_label:x.rooms?`${x.rooms?.floors?.buildings?.name||''} / ${x.rooms?.name||''}`:''})).filter(x=>allowedRooms.has(String(x.room_id)));
+    const allowedStudentIds=new Set(students.map(x=>String(x.id)));
+    const attendance=(at.data||[]).filter(x=>allowedStudentIds.has(String(x.student_id)));
+    const teacherNotes=(sn.data||[]).filter(x=>allowedStudentIds.has(String(x.student_id)));
+    const grades=(gr.data||[]).filter(x=>allowedStudentIds.has(String(x.student_id))).map(x=>({...x,exam_name:x.grade_items?.title,max_score:x.grade_items?.max_score,date:x.grade_items?.exam_date,subject_name:x.grade_items?.subjects?.name}));
+    state.data={students,attendance,grades,announcements:[],subjects:su.data||[],teachers:[],settings:se.data||{},audit:[],buildings:bu.data||[],floors:fl.data||[],rooms:ro.data||[],studentNotes:await hydrateNoteImages(teacherNotes),notifications:[],teacherAssignments};
   }
+  state.data.students=(state.data.students||[]).map(st=>({...st,full_name:v611CombineStudentName(st.full_name,st.family_name)}));
 }
 function navItems(){
   if(state.role==='teacher') return [['home','⌂','الرئيسية'],['students','♟','طلابي'],['attendance','✓','الحضور والغياب'],['notes','✎','ملاحظات الطلاب']];
@@ -563,7 +567,7 @@ function appPage(){
   const labels={home:'الرئيسية',buildings:'الصفوف والشعب',students:'الطلاب',attendance:'الحضور والغياب',notes:'ملاحظات الطلاب',grades:'النتائج',announcements:'الإعلانات',teachers:'إدارة المدرسين',audit:'سجل العمليات',settings:'الإعدادات'};
   if(state.role==='teacher'&&!['home','students','attendance','notes'].includes(state.tab))state.tab='home';
   return `<div class="app-shell"><aside class="sidebar ${state.sidebar?'open':''}"><div class="side-brand">${logo()}<div><b>${esc(state.data?.settings?.school_name||'مدرسة المنارة الخاصة')}</b><small>MANARA PRIVATE SCHOOL</small></div><button class="drawer-close" onclick="toggleSidebar(false)" aria-label="إغلاق">×</button></div><div class="user-card"><b>${esc(state.user?.name||'')}</b><small>${state.role==='admin'?'مدير النظام — تحكم كامل':'مدرس — طلاب + حضور + ملاحظات للأهل'}</small></div><div class="side-label">القائمة الرئيسية</div><nav class="side-nav">${navItems().map(n=>`<button class="${state.tab===n[0]?'active':''}" onclick="setTab('${n[0]}')"><i class="nav-icon">${n[1]}</i>${n[2]}</button>`).join('')}</nav><div class="side-label" style="margin-top:16px">الحساب</div><nav class="side-nav"><button onclick="goParent()"><i class="nav-icon">◫</i>معاينة بوابة الأهل</button><button onclick="logout()"><i class="nav-icon">↪</i>تسجيل الخروج</button></nav></aside><div class="drawer-backdrop ${state.sidebar?'show':''}" onclick="toggleSidebar(false)"></div>
-  <main class="main"><header class="topbar"><div class="row"><button class="btn outline mobile-menu" onclick="toggleSidebar()">☰</button><div class="page-title"><b>${labels[state.tab]||''}</b><small>${state.role==='admin'?'لوحة الإدارة الرئيسية':'إدارة الطلاب والحضور والملاحظات ضمن الشعب المخصصة'}</small></div></div><img class="top-logo" src="logo.jpg" alt=""><div class="top-actions"><span class="badge ${state.role}">${state.role==='admin'?'الإدارة':'مدرس'}</span></div></header><section class="content"><img class="content-watermark" src="logo.jpg" alt="">${pageContent()}</section></main></div>`;
+  <main class="main"><header class="topbar"><div class="row"><button class="btn outline mobile-menu" onclick="toggleSidebar()">☰</button><div class="page-title"><b>${labels[state.tab]||''}</b><small>${state.role==='admin'?'لوحة الإدارة الرئيسية':'إدارة الطلاب والحضور والملاحظات ضمن الشعب المخصصة'}</small></div></div><img class="top-logo" src="assets/logo.jpg" alt=""><div class="top-actions"><span class="badge ${state.role}">${state.role==='admin'?'الإدارة':'مدرس'}</span></div></header><section class="content"><img class="content-watermark" src="assets/logo.jpg" alt="">${pageContent()}</section></main></div>`;
 }
 function setTab(t){state.tab=t;state.sidebar=false;render();}
 function pageContent(){ const fn=window[`page_${state.tab}`]; return fn?fn():'<div class="card">الصفحة غير موجودة</div>'; }
@@ -1028,7 +1032,7 @@ function appPage(){
   const labels={home:'الرئيسية',buildings:'الصفوف والشعب',students:'الطلاب',attendance:'الحضور والغياب',reports:'الجرد الشهري',archive:'الأرشيف السنوي',notes:'ملاحظات الطلاب',grades:'النتائج',announcements:'الإعلانات',teachers:'إدارة المدرسين',audit:'سجل العمليات',settings:'الإعدادات'};
   if(state.role==='teacher'&&!['home','students','attendance','reports','notes'].includes(state.tab))state.tab='home';
   return `<div class="app-shell"><aside class="sidebar ${state.sidebar?'open':''}"><div class="side-brand">${logo()}<div><b>${esc(state.data?.settings?.school_name||'مدرسة المنارة الخاصة')}</b><small>MANARA PRIVATE SCHOOL</small></div><button class="drawer-close" onclick="toggleSidebar(false)" aria-label="إغلاق">×</button></div><div class="user-card"><b>${esc(state.user?.name||'')}</b><small>${state.role==='admin'?'مدير النظام — تحكم كامل':'مدرس — الشعب المخصصة فقط'}</small></div><div class="side-label">القائمة الرئيسية</div><nav class="side-nav">${navItems().map(n=>`<button class="${state.tab===n[0]?'active':''}" onclick="setTab('${n[0]}')"><i class="nav-icon">${n[1]}</i>${n[2]}</button>`).join('')}</nav><div class="side-label" style="margin-top:16px">الحساب</div><nav class="side-nav"><button onclick="goParent()"><i class="nav-icon">◫</i>معاينة بوابة الأهل</button><button onclick="logout()"><i class="nav-icon">↪</i>تسجيل الخروج</button></nav></aside><div class="drawer-backdrop ${state.sidebar?'show':''}" onclick="toggleSidebar(false)"></div>
-  <main class="main"><header class="topbar"><div class="row"><button class="btn outline mobile-menu" onclick="toggleSidebar()">☰</button><div class="page-title"><b>${labels[state.tab]||''}</b><small>${state.role==='admin'?'لوحة الإدارة الرئيسية':'طلابك وشعبك فقط'}</small></div></div><img class="top-logo" src="logo.jpg" alt=""><div class="top-actions"><span class="badge ${state.role}">${state.role==='admin'?'الإدارة':'مدرس'}</span></div></header><section class="content"><img class="content-watermark" src="logo.jpg" alt="">${pageContent()}</section></main></div>`;
+  <main class="main"><header class="topbar"><div class="row"><button class="btn outline mobile-menu" onclick="toggleSidebar()">☰</button><div class="page-title"><b>${labels[state.tab]||''}</b><small>${state.role==='admin'?'لوحة الإدارة الرئيسية':'طلابك وشعبك فقط'}</small></div></div><img class="top-logo" src="assets/logo.jpg" alt=""><div class="top-actions"><span class="badge ${state.role}">${state.role==='admin'?'الإدارة':'مدرس'}</span></div></header><section class="content"><img class="content-watermark" src="assets/logo.jpg" alt="">${pageContent()}</section></main></div>`;
 }
 
 function parentPage(){
@@ -1325,4 +1329,226 @@ async function saveStudent(id=''){
     }
     closeModal();render();if(!id&&newStudentId)setTimeout(()=>showStudentQr(newStudentId),120);
   }catch(e){msg.innerHTML=`<div class="message error">${esc(authErrorArabic(e.message))}</div>`;}
+}
+
+/* ============================================================
+   MANARA V6.12 — WhatsApp + teacher grades + search + sorting
+   ============================================================ */
+
+function v612StudentDisplayName(st){
+  if(!st)return '—';
+  return v611CombineStudentName(st.full_name||'',st.family_name||'')||'—';
+}
+function v612SortedStudents(list){
+  return (list||[]).slice().sort((a,b)=>v612StudentDisplayName(a).localeCompare(v612StudentDisplayName(b),'ar',{sensitivity:'base',numeric:true}));
+}
+function studentName(id){return v612StudentDisplayName((state.data.students||[]).find(s=>String(s.id)===String(id)));}
+function v612WhatsAppDigits(phone=''){
+  const raw=String(phone||'').trim();if(!raw)return '';
+  let digits=raw.replace(/\D/g,'');
+  if(raw.startsWith('00'))digits=digits.replace(/^00/,'');
+  else if(raw.startsWith('0')&&!raw.startsWith('+'))digits='963'+digits.replace(/^0+/,'');
+  return digits;
+}
+function v612WhatsAppPhoneHtml(phone=''){
+  const raw=String(phone||'').trim(),digits=v612WhatsAppDigits(raw);
+  if(!raw)return '—';
+  if(!digits)return esc(raw);
+  return `<a href="https://wa.me/${digits}" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;color:#087a3c;font-weight:800;text-decoration:none"><span>☎ ${esc(raw)}</span><span style="font-size:12px">واتساب ↗</span></a>`;
+}
+
+function navItems(){
+  if(state.role==='teacher') return [
+    ['home','⌂','الرئيسية'],
+    ['buildings','▦','الصفوف والشعب'],
+    ['students','♟','طلابي'],
+    ['attendance','✓','الحضور والغياب'],
+    ['grades','▤','النتائج'],
+    ['reports','▥','الجرد الشهري'],
+    ['notes','✎','ملاحظات الطلاب']
+  ];
+  return [
+    ['home','⌂','الرئيسية'],['buildings','▦','الصفوف والشعب'],['students','♟','الطلاب'],
+    ['attendance','✓','الحضور والغياب'],['reports','▥','الجرد الشهري'],['archive','▧','الأرشيف السنوي'],
+    ['notes','✎','ملاحظات الطلاب'],['grades','▤','النتائج'],['announcements','◉','الإعلانات'],
+    ['teachers','♙','المدرسون'],['audit','≡','سجل العمليات'],['settings','⚙','الإعدادات']
+  ];
+}
+function appPage(){
+  const labels={home:'الرئيسية',buildings:'الصفوف والشعب',students:'الطلاب',attendance:'الحضور والغياب',reports:'الجرد الشهري',archive:'الأرشيف السنوي',notes:'ملاحظات الطلاب',grades:'النتائج',announcements:'الإعلانات',teachers:'إدارة المدرسين',audit:'سجل العمليات',settings:'الإعدادات'};
+  if(state.role==='teacher'&&!['home','buildings','students','attendance','grades','reports','notes'].includes(state.tab))state.tab='home';
+  const topLogo=logo().replace('<img','<img class="top-logo"'),watermark=logo().replace('<img','<img class="content-watermark"');
+  return `<div class="app-shell"><aside class="sidebar ${state.sidebar?'open':''}"><div class="side-brand">${logo()}<div><b>${esc(state.data?.settings?.school_name||'مدرسة المنارة الخاصة')}</b><small>MANARA PRIVATE SCHOOL</small></div><button class="drawer-close" onclick="toggleSidebar(false)" aria-label="إغلاق">×</button></div><div class="user-card"><b>${esc(state.user?.name||'')}</b><small>${state.role==='admin'?'مدير النظام — تحكم كامل':'مدرس — طلاب + حضور + نتائج + ملاحظات ضمن الشعب المخصصة'}</small></div><div class="side-label">القائمة الرئيسية</div><nav class="side-nav">${navItems().map(n=>`<button class="${state.tab===n[0]?'active':''}" onclick="setTab('${n[0]}')"><i class="nav-icon">${n[1]}</i>${n[2]}</button>`).join('')}</nav><div class="side-label" style="margin-top:16px">الحساب</div><nav class="side-nav"><button onclick="goParent()"><i class="nav-icon">◫</i>معاينة بوابة الأهل</button><button onclick="logout()"><i class="nav-icon">↪</i>تسجيل الخروج</button></nav></aside><div class="drawer-backdrop ${state.sidebar?'show':''}" onclick="toggleSidebar(false)"></div><main class="main"><header class="topbar"><div class="row"><button class="btn outline mobile-menu" onclick="toggleSidebar()">☰</button><div class="page-title"><b>${labels[state.tab]||''}</b><small>${state.role==='admin'?'لوحة الإدارة الرئيسية':'طلابك وشعبك فقط'}</small></div></div>${topLogo}<div class="top-actions"><span class="badge ${state.role}">${state.role==='admin'?'الإدارة':'مدرس'}</span></div></header><section class="content">${watermark}${pageContent()}</section></main></div>`;
+}
+
+function studentTableHtml(q=''){
+  q=String(q||'').trim().toLowerCase();
+  const rows=v612SortedStudents(state.data.students||[]).filter(st=>!q||[v612StudentDisplayName(st),st.father_name,st.grandfather_name,st.family_name,st.access_code,st.grade,st.class_name,st.building_name,st.floor_name,st.room_name,roomLocation(st.room_id)].some(v=>String(v||'').toLowerCase().includes(q)));
+  return `<div class="table-wrap"><table><thead><tr><th>الطالب</th><th>الأب</th><th>الجد</th><th>الصف</th><th>الموقع</th><th>الكود</th><th>الحالة</th><th>إجراء</th></tr></thead><tbody>${rows.map(st=>`<tr><td><b>${esc(v612StudentDisplayName(st))}</b></td><td>${esc(st.father_name||'—')}</td><td><b>${esc(st.grandfather_name||'—')}</b></td><td>${esc(st.grade||'—')} ${st.class_name?`/ ${esc(st.class_name)}`:''}</td><td>${esc(st.location_label||roomLocation(st.room_id))}</td><td><span class="code">${esc(st.access_code||'')}</span></td><td><span class="badge ${st.active===false?'inactive':'active'}">${st.active===false?'موقوف':'فعال'}</span></td><td>${state.role==='admin'?`<div class="row"><button class="btn small secondary" onclick="openStudentModal('${st.id}')">تعديل</button><button class="btn small warning" onclick="regenerateCode('${st.id}')">كود جديد</button><button class="btn small secondary" onclick="showStudentQr('${st.id}')">QR</button><button class="btn small" onclick="openNoteModal('${st.id}')">ملاحظة</button><button class="btn small danger" onclick="deleteStudent('${st.id}')">حذف</button></div>`:`<div class="row"><button class="btn small secondary" onclick="openStudentModal('${st.id}')">تعديل</button><button class="btn small secondary" onclick="showStudentQr('${st.id}')">QR</button><button class="btn small" onclick="openNoteModal('${st.id}')">ملاحظة للأهل</button><button class="btn small danger" onclick="deleteStudent('${st.id}')">حذف</button></div>`}</td></tr>`).join('')||'<tr><td colspan="8" class="empty">لا توجد نتائج</td></tr>'}</tbody></table></div>`;
+}
+function attendanceTableHtml(roster,records,q='',buildingId='',roomId=''){
+  q=String(q||'').trim().toLowerCase();
+  const rows=v612SortedStudents(roster||[]).filter(s=>{const r=state.data.rooms?.find(x=>x.id===s.room_id),f=state.data.floors?.find(x=>x.id===r?.floor_id);return(!q||[v612StudentDisplayName(s),s.grade,s.class_name,roomLocation(s.room_id)].some(v=>String(v||'').toLowerCase().includes(q)))&&(!buildingId||f?.building_id===buildingId)&&(!roomId||s.room_id===roomId)});
+  return `<div class="table-wrap"><table><thead><tr><th>الطالب</th><th>الصف</th><th>الموقع</th><th>الحالة</th><th>دقائق التأخير</th><th>ملاحظة</th><th>حفظ</th></tr></thead><tbody>${rows.map(s=>{const r=records.find(x=>x.student_id===s.id)||{};return `<tr><td><b>${esc(v612StudentDisplayName(s))}</b></td><td>${esc(s.grade||'—')}</td><td>${esc(s.location_label||roomLocation(s.room_id))}</td><td><select id="st_${s.id}"><option ${r.status==='حاضر'?'selected':''}>حاضر</option><option ${r.status==='غائب'?'selected':''}>غائب</option><option ${r.status==='متأخر'?'selected':''}>متأخر</option></select></td><td><input id="min_${s.id}" type="number" min="0" value="${esc(r.late_minutes||0)}" style="width:85px"></td><td><input id="note_${s.id}" value="${esc(r.note||'')}" placeholder="اختياري"></td><td><button class="btn small" onclick="saveAttendanceRow('${s.id}')">حفظ</button></td></tr>`}).join('')||'<tr><td colspan="7" class="empty">لا يوجد طلاب ضمن هذا الاختيار</td></tr>'}</tbody></table></div>`;
+}
+function v610StudentsInRoom(roomId){return v612SortedStudents((state.data.students||[]).filter(st=>String(st.room_id)===String(roomId)));}
+function v610StudentAvatarHtml(st){const initial=esc((v612StudentDisplayName(st)||'ط').trim().charAt(0)||'ط');return `<div style="width:64px;height:64px;flex:0 0 64px;border-radius:50%;overflow:hidden;background:#e8f1ec;display:grid;place-items:center;font-size:25px;font-weight:800;color:#0b6b3a"><span id="v610_initial_${st.id}">${initial}</span><img id="v610_photo_${st.id}" alt="صورة الطالب" style="display:none;width:100%;height:100%;object-fit:cover"></div>`;}
+function v610StudentInfoCard(st){
+  const actions=`<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:12px"><button class="btn small secondary" onclick="v610FolderAction('edit','${st.id}')">تعديل</button>${state.role==='admin'?`<button class="btn small warning" onclick="v610FolderAction('move','${st.id}')">نقل / ترقية</button>`:''}<button class="btn small secondary" onclick="v610FolderAction('qr','${st.id}')">QR</button><button class="btn small" onclick="v610FolderAction('report','${st.id}')">تقرير PDF</button><button class="btn small" onclick="v610FolderAction('note','${st.id}')">ملاحظة</button></div>`;
+  return `<div class="card" style="margin-bottom:12px"><div style="display:flex;gap:12px;align-items:flex-start">${v610StudentAvatarHtml(st)}<div style="flex:1;min-width:0"><div class="row between" style="align-items:flex-start;gap:10px"><div><b style="font-size:17px">${esc(v612StudentDisplayName(st))}</b><div class="hint">${esc(st.access_code||'—')}</div></div><span class="badge ${st.active===false?'inactive':'active'}">${st.active===false?'موقوف':'فعال'}</span></div><div class="mini-grid" style="margin-top:12px"><div><b>اسم الأب:</b> ${esc(st.father_name||'—')}</div><div><b>اسم الأم:</b> ${esc(st.mother_name||'—')}</div><div><b>اسم الجد:</b> ${esc(st.grandfather_name||'—')}</div><div><b>تاريخ الميلاد:</b> ${esc(st.date_of_birth||'—')}</div><div><b>ولي الأمر:</b> ${v612WhatsAppPhoneHtml(st.parent_phone||'')}</div><div><b>العنوان:</b> ${esc(st.address||'—')}</div><div><b>رقم السيارة:</b> ${esc(st.transport_car_number||'—')}</div><div><b>الصورة الشخصية:</b> ${st.photo_path?'محفوظة ✓':'غير مضافة'}</div></div>${st.notes?`<div class="hint" style="margin-top:9px"><b>ملاحظة:</b> ${esc(st.notes)}</div>`:''}${actions}</div></div></div>`;
+}
+
+function v612NotesTableHtml(q=''){
+  q=String(q||'').trim().toLowerCase();const allowedIds=new Set((state.data.students||[]).map(s=>String(s.id)));
+  const notes=(state.data.studentNotes||[]).filter(n=>state.role==='admin'||allowedIds.has(String(n.student_id))).filter(n=>!q||[studentName(n.student_id),n.title,n.category].some(v=>String(v||'').toLowerCase().includes(q)));
+  return `<div class="table-wrap"><table><thead><tr><th>الطالب</th><th>العنوان</th><th>التصنيف</th><th>الأهمية</th><th>الصورة</th><th>للأهل</th><th>التاريخ</th><th>إجراء</th></tr></thead><tbody>${notes.map(n=>`<tr><td><b>${esc(studentName(n.student_id))}</b></td><td>${esc(n.title||'ملاحظة')}</td><td>${esc(n.category||'عامة')}</td><td><span class="badge ${n.importance==='مهم'?'absent':'active'}">${esc(n.importance||'عادي')}</span></td><td>${n.image_url?`<a href="${esc(n.image_url)}" target="_blank" rel="noopener">📷 عرض</a>`:'—'}</td><td>${n.visible_to_parent===false?'لا':'نعم 🔔'}</td><td>${esc((n.created_at||'').slice(0,10))}</td><td>${state.role==='admin'?`<button class="btn small danger" onclick="deleteStudentNote('${n.id}')">حذف</button>`:'<span class="badge teacher">مرسلة للأهل</span>'}</td></tr>`).join('')||'<tr><td colspan="8" class="empty">لا توجد ملاحظات مطابقة</td></tr>'}</tbody></table></div>`;
+}
+function filterNotesTable(){const box=document.getElementById('notesTable');if(box)box.innerHTML=v612NotesTableHtml(document.getElementById('notesSearch')?.value||'');applyMobileUi();}
+function page_notes(){
+  if(!['admin','teacher'].includes(state.role))return noAccess();
+  return `<div class="toolbar"><div><h2 class="section-title">ملاحظات الطلاب</h2><div class="muted">${state.role==='teacher'?'يمكنك إضافة ملاحظة فقط لطلاب الشعب المخصصة لك، وتصل مباشرة إلى ولي الأمر.':'كل ملاحظة تُرسل إلزامياً إلى كود الطالب وتظهر كإشعار غير مقروء في بوابة ولي الأمر.'}</div></div><button class="btn" onclick="openNoteModal()">+ ملاحظة جديدة</button></div><div class="card"><div class="toolbar"><div class="field search"><label>بحث باسم الطالب</label><input id="notesSearch" placeholder="اكتب اسم الطالب..." oninput="filterNotesTable()"></div></div><div id="notesTable">${v612NotesTableHtml()}</div></div>`;
+}
+function openNoteModal(studentId=''){
+  const students=v612SortedStudents(state.data.students||[]);if(state.role==='teacher'&&!students.length){alert('لا يوجد طلاب ضمن الشعب المخصصة لك.');return;}
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="modal"><div class="modalbox"><div class="row between"><div><h2 class="section-title">إضافة ملاحظة على الطالب</h2><div class="muted">${state.role==='teacher'?'الملاحظة ستُرسل لولي أمر الطالب مباشرة، ويمكنك اختيار طلاب شعبك فقط.':'كل ملاحظة هنا تصل إلزامياً إلى بوابة ولي الأمر المرتبطة بكود الطالب وتُسجل كإشعار غير مقروء.'}</div></div><button class="btn outline" onclick="closeModal()">إغلاق</button></div><div id="modalMsg"></div><div class="mini-grid section"><div class="field"><label>الطالب *</label><select id="n_student" onchange="updateNoteStudentCode()">${students.map(st=>`<option value="${st.id}" ${studentId===st.id?'selected':''}>${esc(v612StudentDisplayName(st))} — ${esc(st.access_code)}</option>`).join('')}</select></div><div class="field"><label>كود الطالب *</label><input id="n_code" readonly value="${esc((students.find(st=>st.id===(studentId||students[0]?.id))?.access_code)||'')}"></div><div class="field"><label>التصنيف</label><select id="n_category"><option>ملاحظة عامة</option><option>سلوك</option><option>دراسة</option><option>التزام</option><option>تميز</option><option>تنبيه</option><option>تكريم</option><option>شهادة</option></select></div><div class="field"><label>الأهمية</label><select id="n_importance"><option>عادي</option><option>مهم</option></select></div></div><div class="message ok">🔔 الإرسال لولي الأمر إجباري لهذه الملاحظات.</div><div class="field"><label>عنوان الملاحظة *</label><input id="n_title" placeholder="مثال: تكريم الطالب أو شهادة تقدير"></div><div class="field"><label>نص الملاحظة *</label><textarea id="n_content" placeholder="اكتب الملاحظة التي تريد أن تصل إلى ولي الأمر..."></textarea></div><div class="field"><label>صورة مرفقة (اختياري)</label><input id="n_image" type="file" accept="image/*" capture="environment" onchange="previewNoteImage()"><div class="hint">يمكنك تصوير شهادة/تكريم مباشرة أو اختيار صورة من الهاتف. الحد الأقصى 10 MB.</div><div id="n_image_preview"></div></div><button class="btn" onclick="saveStudentNote()">حفظ وإرسال لولي الأمر</button></div></div>`);
+}
+
+function v612GradesTableHtml(q=''){
+  q=String(q||'').trim().toLowerCase();const allowedIds=new Set((state.data.students||[]).map(s=>String(s.id)));
+  const rows=(state.data.grades||[]).filter(g=>state.role==='admin'||allowedIds.has(String(g.student_id))).filter(g=>!q||studentName(g.student_id).toLowerCase().includes(q));
+  return `<div class="table-wrap"><table><thead><tr><th>الطالب</th><th>المادة</th><th>الاختبار</th><th>التاريخ</th><th>العلامة</th><th>إجراء</th></tr></thead><tbody>${rows.map(g=>{const canDelete=state.role==='admin'||String(g.created_by||'')===String(state.user?.id||'');return `<tr><td><b>${esc(studentName(g.student_id))}</b></td><td>${esc(g.subject_name||g.subject||'')}</td><td>${esc(g.exam_name||g.exam||'')}</td><td>${esc(g.date||'—')}</td><td><b>${esc(g.score)}/${esc(g.max_score||g.max||100)}</b></td><td>${canDelete?`<button class="btn small danger" onclick="deleteGrade('${g.id}')">حذف</button>`:'—'}</td></tr>`}).join('')||'<tr><td colspan="6" class="empty">لا توجد نتائج مطابقة</td></tr>'}</tbody></table></div>`;
+}
+function filterGradeTable(){const box=document.getElementById('gradeTable');if(box)box.innerHTML=v612GradesTableHtml(document.getElementById('gradeSearch')?.value||'');applyMobileUi();}
+function page_grades(){
+  if(!['admin','teacher'].includes(state.role))return noAccess();
+  return `<div class="toolbar"><div><h2 class="section-title">النتائج والاختبارات</h2><div class="muted">${state.role==='teacher'?'تظهر لك نتائج طلاب شعبك فقط، وأي نتيجة تسجلها تدخل مباشرة في تقرير الطالب PDF.':'إدارة نتائج الطلاب، وتظهر النتائج نفسها في تقارير PDF.'}</div></div><button class="btn" onclick="openGradeModal()">+ إضافة نتيجة</button></div>${state.role==='teacher'?'<div class="role-note">يمكنك تسجيل النتائج فقط لطلاب الشعب المخصصة لك.</div>':''}<div class="card"><div class="toolbar"><div class="field search"><label>بحث باسم الطالب</label><input id="gradeSearch" placeholder="اكتب اسم الطالب..." oninput="filterGradeTable()"></div><div class="hint">عدد النتائج: <b>${(state.data.grades||[]).length}</b></div></div><div id="gradeTable">${v612GradesTableHtml()}</div></div>`;
+}
+function openGradeModal(){
+  const students=v612SortedStudents(state.data.students||[]);if(!students.length){alert('لا يوجد طلاب متاحون لحسابك.');return;}
+  const subjects=(state.data.subjects||[]).slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'ar'));
+  if(!subjects.length){alert('لا توجد مواد مسجلة في النظام.');return;}
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="modal"><div class="modalbox"><div class="row between"><h2 class="section-title">إضافة نتيجة</h2><button class="btn outline" onclick="closeModal()">إغلاق</button></div><div id="modalMsg"></div><div class="mini-grid section"><div class="field"><label>الطالب</label><select id="g_student">${students.map(s=>`<option value="${s.id}">${esc(v612StudentDisplayName(s))}</option>`).join('')}</select></div><div class="field"><label>المادة</label><select id="g_subject">${subjects.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></div><div class="field"><label>اسم الاختبار</label><input id="g_exam"></div><div class="field"><label>التاريخ</label><input id="g_date" type="date" value="${today()}"></div><div class="field"><label>العلامة</label><input id="g_score" type="number" min="0" step="0.01"></div><div class="field"><label>العلامة الكاملة</label><input id="g_max" type="number" min="0.01" step="0.01" value="100"></div></div><button class="btn" onclick="saveGrade()">حفظ النتيجة</button></div></div>`);
+}
+async function saveGrade(){
+  const student_id=document.getElementById('g_student')?.value,subjectId=document.getElementById('g_subject')?.value,exam=document.getElementById('g_exam')?.value.trim(),date=document.getElementById('g_date')?.value,score=Number(document.getElementById('g_score')?.value),max=Number(document.getElementById('g_max')?.value)||100,msg=document.getElementById('modalMsg');
+  if(!student_id||!subjectId||!exam||Number.isNaN(score)||score<0||max<=0||score>max){msg.innerHTML='<div class="message error">أكمل بيانات الاختبار وتأكد أن العلامة بين 0 والعلامة الكاملة.</div>';return;}
+  if(state.role==='teacher'&&!new Set((state.data.students||[]).map(s=>String(s.id))).has(String(student_id))){msg.innerHTML='<div class="message error">هذا الطالب ليس ضمن الشعب المخصصة لك.</div>';return;}
+  let itemId='';
+  try{
+    if(DEMO){const subject=state.data.subjects.find(s=>s.id===subjectId)?.name||'';state.data.grades.unshift({id:uid(),student_id,subject_id:subjectId,subject_name:subject,exam_name:exam,date,score,max_score:max,created_by:state.user?.id||'',created_at:new Date().toISOString()});audit('إضافة','نتيجة',`${studentName(student_id)} / ${subject}`);saveDemo();}
+    else{
+      const {data:item,error:e1}=await sb.from('grade_items').insert({subject_id:subjectId,title:exam,max_score:max,exam_date:date,created_by:state.user.id}).select().single();if(e1)throw e1;itemId=item.id;
+      const {error:e2}=await sb.from('grades').insert({student_id,grade_item_id:item.id,score,created_by:state.user.id});if(e2)throw e2;
+      await loadSupabaseData();
+    }
+    closeModal();render();
+  }catch(e){if(itemId&&!DEMO){try{await sb.from('grade_items').delete().eq('id',itemId);}catch(_){}}msg.innerHTML=`<div class="message error">${esc(authErrorArabic(e.message))}</div>`;}
+}
+async function deleteGrade(id){
+  if(!confirm('حذف النتيجة؟'))return;const g=(state.data.grades||[]).find(x=>String(x.id)===String(id));
+  if(state.role==='teacher'&&g&&String(g.created_by||'')!==String(state.user?.id||'')){alert('يمكنك حذف النتائج التي سجلتها أنت فقط.');return;}
+  if(DEMO){state.data.grades=state.data.grades.filter(x=>x.id!==id);audit('حذف','نتيجة',id);saveDemo();render();return;}
+  const {error}=await sb.from('grades').delete().eq('id',id);if(error)return alert(authErrorArabic(error.message));await loadSupabaseData();render();
+}
+
+/* ============================================================
+   MANARA V6.12 FIX 1 — exact requested UX fixes
+   - WhatsApp visible from students list
+   - Search INSIDE Add Result / Add Note dialogs
+   - Name + family name normalized after every load
+   - Teacher grades/subjects loaded so PDF + results work
+   ============================================================ */
+
+async function loadSupabaseData(){
+  if(DEMO){
+    state.data.students=v612SortedStudents((state.data.students||[]).map(st=>({...st,full_name:v611CombineStudentName(st.full_name,st.family_name)})));
+    return;
+  }
+  const safe=(r,def)=>r?.error?def:(r?.data??def);
+  if(state.role==='admin'){
+    const [st,at,gr,an,su,pr,se,au,bu,fl,ro,sn,pn,ta,yrs,yrrec,dash]=await Promise.all([
+      sb.from('students').select('*,rooms(id,code,name,grade,section_label,floor_id,floors(name,building_id,buildings(name)))').order('created_at',{ascending:false}),
+      sb.from('attendance').select('*').order('date',{ascending:false}).limit(5000),
+      sb.from('grades').select('*,grade_items(title,max_score,exam_date,academic_year,subjects(name))').order('created_at',{ascending:false}).limit(5000),
+      sb.from('announcements').select('*').order('created_at',{ascending:false}),
+      sb.from('subjects').select('*').order('name'),
+      sb.from('profiles').select('id,full_name,role,active,created_at').eq('role','teacher').order('created_at',{ascending:false}),
+      sb.from('school_settings').select('*').limit(1).maybeSingle(),
+      sb.from('audit_logs').select('*').order('created_at',{ascending:false}).limit(300),
+      sb.from('buildings').select('*').order('code'),
+      sb.from('floors').select('*').order('floor_order'),
+      sb.from('rooms').select('*').order('room_order'),
+      sb.from('student_notes').select('*').order('created_at',{ascending:false}).limit(1000),
+      sb.from('parent_notifications').select('*').order('created_at',{ascending:false}).limit(1000),
+      sb.from('teacher_room_assignments').select('*'),
+      sb.from('academic_years').select('*').order('label',{ascending:false}),
+      sb.from('student_year_records').select('*').order('student_name'),
+      sb.rpc('report_dashboard_stats',{p_date:today()})
+    ]);
+    const students=v612SortedStudents(safe(st,[]).map(x=>({...x,full_name:v611CombineStudentName(x.full_name,x.family_name),room_name:x.rooms?.name,room_code:x.rooms?.code,floor_name:x.rooms?.floors?.name,building_name:x.rooms?.floors?.buildings?.name,location_label:x.rooms?`${x.rooms?.floors?.buildings?.name||''} / ${x.rooms?.name||''}`:''})));
+    state.data={students,attendance:safe(at,[]),grades:safe(gr,[]).map(x=>({...x,exam_name:x.grade_items?.title,max_score:x.grade_items?.max_score,date:x.grade_items?.exam_date,academic_year:x.grade_items?.academic_year,subject_name:x.grade_items?.subjects?.name})),announcements:safe(an,[]),subjects:safe(su,[]),teachers:safe(pr,[]),settings:safe(se,{}),audit:safe(au,[]),buildings:safe(bu,[]),floors:safe(fl,[]),rooms:safe(ro,[]),studentNotes:await hydrateNoteImages(safe(sn,[])),notifications:safe(pn,[]),teacherAssignments:safe(ta,[]),academicYears:safe(yrs,[]),studentYearRecords:safe(yrrec,[]),dashboardStats:safe(dash,null)};
+  }else{
+    const [st,at,gr,su,se,bu,fl,ro,sn,ta,yrs]=await Promise.all([
+      sb.from('students').select('*,rooms(id,code,name,grade,section_label,floor_id,floors(name,building_id,buildings(name)))').order('created_at',{ascending:false}),
+      sb.from('attendance').select('*').order('date',{ascending:false}).limit(5000),
+      sb.from('grades').select('*,grade_items(title,max_score,exam_date,academic_year,subjects(name))').order('created_at',{ascending:false}).limit(5000),
+      sb.from('subjects').select('*').order('name'),
+      sb.from('school_settings').select('*').limit(1).maybeSingle(),
+      sb.from('buildings').select('*').order('code'),
+      sb.from('floors').select('*').order('floor_order'),
+      sb.from('rooms').select('*').order('room_order'),
+      sb.from('student_notes').select('*').order('created_at',{ascending:false}).limit(1000),
+      sb.from('teacher_room_assignments').select('*').eq('teacher_id',state.user.id),
+      sb.from('academic_years').select('*').order('label',{ascending:false})
+    ]);
+    const teacherAssignments=safe(ta,[]),allowedRooms=new Set(teacherAssignments.map(x=>String(x.room_id)));
+    const students=v612SortedStudents(safe(st,[]).map(x=>({...x,full_name:v611CombineStudentName(x.full_name,x.family_name),room_name:x.rooms?.name,room_code:x.rooms?.code,floor_name:x.rooms?.floors?.name,building_name:x.rooms?.floors?.buildings?.name,location_label:x.rooms?`${x.rooms?.floors?.buildings?.name||''} / ${x.rooms?.name||''}`:''})).filter(x=>allowedRooms.has(String(x.room_id))));
+    const allowedStudentIds=new Set(students.map(x=>String(x.id)));
+    const attendance=safe(at,[]).filter(x=>allowedStudentIds.has(String(x.student_id)));
+    const teacherNotes=safe(sn,[]).filter(x=>allowedStudentIds.has(String(x.student_id)));
+    const grades=safe(gr,[]).filter(x=>allowedStudentIds.has(String(x.student_id))).map(x=>({...x,exam_name:x.grade_items?.title,max_score:x.grade_items?.max_score,date:x.grade_items?.exam_date,academic_year:x.grade_items?.academic_year,subject_name:x.grade_items?.subjects?.name}));
+    state.data={students,attendance,grades,announcements:[],subjects:safe(su,[]),teachers:[],settings:safe(se,{}),audit:[],buildings:safe(bu,[]),floors:safe(fl,[]),rooms:safe(ro,[]),studentNotes:await hydrateNoteImages(teacherNotes),notifications:[],teacherAssignments,academicYears:safe(yrs,[]),studentYearRecords:[],dashboardStats:null};
+  }
+}
+
+function studentTableHtml(q=''){
+  q=String(q||'').trim().toLowerCase();
+  const rows=v612SortedStudents(state.data.students||[]).filter(st=>!q||[v612StudentDisplayName(st),st.father_name,st.grandfather_name,st.family_name,st.parent_phone,st.access_code,st.grade,st.class_name,st.building_name,st.floor_name,st.room_name,roomLocation(st.room_id)].some(v=>String(v||'').toLowerCase().includes(q)));
+  return `<div class="table-wrap"><table><thead><tr><th>الطالب</th><th>الأب</th><th>الجد</th><th>الصف</th><th>الموقع</th><th>الكود</th><th>الحالة</th><th>إجراء</th></tr></thead><tbody>${rows.map(st=>`<tr><td><b>${esc(v612StudentDisplayName(st))}</b><div style="margin-top:5px">${v612WhatsAppPhoneHtml(st.parent_phone||'')}</div></td><td>${esc(st.father_name||'—')}</td><td><b>${esc(st.grandfather_name||'—')}</b></td><td>${esc(st.grade||'—')} ${st.class_name?`/ ${esc(st.class_name)}`:''}</td><td>${esc(st.location_label||roomLocation(st.room_id))}</td><td><span class="code">${esc(st.access_code||'')}</span></td><td><span class="badge ${st.active===false?'inactive':'active'}">${st.active===false?'موقوف':'فعال'}</span></td><td>${state.role==='admin'?`<div class="row"><button class="btn small secondary" onclick="openStudentModal('${st.id}')">تعديل</button><button class="btn small warning" onclick="regenerateCode('${st.id}')">كود جديد</button><button class="btn small secondary" onclick="showStudentQr('${st.id}')">QR</button><button class="btn small" onclick="openNoteModal('${st.id}')">ملاحظة</button><button class="btn small danger" onclick="deleteStudent('${st.id}')">حذف</button></div>`:`<div class="row"><button class="btn small secondary" onclick="openStudentModal('${st.id}')">تعديل</button><button class="btn small secondary" onclick="showStudentQr('${st.id}')">QR</button><button class="btn small" onclick="openNoteModal('${st.id}')">ملاحظة للأهل</button><button class="btn small danger" onclick="deleteStudent('${st.id}')">حذف</button></div>`}</td></tr>`).join('')||'<tr><td colspan="8" class="empty">لا توجد نتائج</td></tr>'}</tbody></table></div>`;
+}
+
+function v612FilterStudentsByName(q=''){
+  const needle=String(q||'').trim().toLowerCase();
+  return v612SortedStudents(state.data.students||[]).filter(st=>!needle||[v612StudentDisplayName(st),st.family_name,st.father_name,st.access_code].some(v=>String(v||'').toLowerCase().includes(needle)));
+}
+function v612GradeStudentOptions(q=''){
+  return v612FilterStudentsByName(q).map(s=>`<option value="${s.id}">${esc(v612StudentDisplayName(s))}</option>`).join('');
+}
+function filterGradeStudentSelect(){
+  const sel=document.getElementById('g_student');if(!sel)return;
+  const old=sel.value,list=v612FilterStudentsByName(document.getElementById('g_student_search')?.value||'');
+  sel.innerHTML=list.map(s=>`<option value="${s.id}">${esc(v612StudentDisplayName(s))}</option>`).join('');
+  if(list.some(s=>String(s.id)===String(old)))sel.value=old;
+  const count=document.getElementById('g_student_count');if(count)count.textContent=list.length?`${list.length} طالب`:'لا يوجد طالب مطابق';
+}
+function openGradeModal(){
+  const students=v612SortedStudents(state.data.students||[]);if(!students.length){alert('لا يوجد طلاب متاحون لحسابك.');return;}
+  const subjects=(state.data.subjects||[]).slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'ar'));
+  if(!subjects.length){alert('لا توجد مواد مسجلة في النظام.');return;}
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="modal"><div class="modalbox"><div class="row between"><h2 class="section-title">إضافة نتيجة</h2><button class="btn outline" onclick="closeModal()">إغلاق</button></div><div id="modalMsg"></div><div class="section"><div class="field"><label>بحث عن الطالب *</label><input id="g_student_search" autocomplete="off" placeholder="اكتب اسم الطالب أو الكنية..." oninput="filterGradeStudentSelect()"><div id="g_student_count" class="hint">${students.length} طالب</div></div><div class="field"><label>الطالب *</label><select id="g_student">${students.map(s=>`<option value="${s.id}">${esc(v612StudentDisplayName(s))}</option>`).join('')}</select></div></div><div class="mini-grid section"><div class="field"><label>المادة</label><select id="g_subject">${subjects.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></div><div class="field"><label>اسم الاختبار</label><input id="g_exam"></div><div class="field"><label>التاريخ</label><input id="g_date" type="date" value="${today()}"></div><div class="field"><label>العلامة</label><input id="g_score" type="number" min="0" step="0.01"></div><div class="field"><label>العلامة الكاملة</label><input id="g_max" type="number" min="0.01" step="0.01" value="100"></div></div><button class="btn" onclick="saveGrade()">حفظ النتيجة</button></div></div>`);
+  setTimeout(()=>document.getElementById('g_student_search')?.focus(),40);
+}
+
+function filterNoteStudentSelect(){
+  const sel=document.getElementById('n_student');if(!sel)return;
+  const old=sel.value,list=v612FilterStudentsByName(document.getElementById('n_student_search')?.value||'');
+  sel.innerHTML=list.map(st=>`<option value="${st.id}">${esc(v612StudentDisplayName(st))} — ${esc(st.access_code||'')}</option>`).join('');
+  if(list.some(s=>String(s.id)===String(old)))sel.value=old;
+  updateNoteStudentCode();
+  const count=document.getElementById('n_student_count');if(count)count.textContent=list.length?`${list.length} طالب`:'لا يوجد طالب مطابق';
+}
+function openNoteModal(studentId=''){
+  const students=v612SortedStudents(state.data.students||[]);if(state.role==='teacher'&&!students.length){alert('لا يوجد طلاب ضمن الشعب المخصصة لك.');return;}
+  const selected=students.find(st=>String(st.id)===String(studentId))||students[0];
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="modal"><div class="modalbox"><div class="row between"><div><h2 class="section-title">إضافة ملاحظة على الطالب</h2><div class="muted">${state.role==='teacher'?'الملاحظة ستُرسل لولي أمر الطالب مباشرة، ويمكنك اختيار طلاب شعبك فقط.':'كل ملاحظة هنا تصل إلزامياً إلى بوابة ولي الأمر المرتبطة بكود الطالب وتُسجل كإشعار غير مقروء.'}</div></div><button class="btn outline" onclick="closeModal()">إغلاق</button></div><div id="modalMsg"></div><div class="section"><div class="field"><label>بحث عن الطالب</label><input id="n_student_search" autocomplete="off" placeholder="اكتب اسم الطالب أو الكنية..." oninput="filterNoteStudentSelect()"><div id="n_student_count" class="hint">${students.length} طالب</div></div></div><div class="mini-grid section"><div class="field"><label>الطالب *</label><select id="n_student" onchange="updateNoteStudentCode()">${students.map(st=>`<option value="${st.id}" ${String(selected?.id||'')===String(st.id)?'selected':''}>${esc(v612StudentDisplayName(st))} — ${esc(st.access_code||'')}</option>`).join('')}</select></div><div class="field"><label>كود الطالب *</label><input id="n_code" readonly value="${esc(selected?.access_code||'')}"></div><div class="field"><label>التصنيف</label><select id="n_category"><option>ملاحظة عامة</option><option>سلوك</option><option>دراسة</option><option>التزام</option><option>تميز</option><option>تنبيه</option><option>تكريم</option><option>شهادة</option></select></div><div class="field"><label>الأهمية</label><select id="n_importance"><option>عادي</option><option>مهم</option></select></div></div><div class="message ok">🔔 الإرسال لولي الأمر إجباري لهذه الملاحظات.</div><div class="field"><label>عنوان الملاحظة *</label><input id="n_title" placeholder="مثال: تكريم الطالب أو شهادة تقدير"></div><div class="field"><label>نص الملاحظة *</label><textarea id="n_content" placeholder="اكتب الملاحظة التي تريد أن تصل إلى ولي الأمر..."></textarea></div><div class="field"><label>صورة مرفقة (اختياري)</label><input id="n_image" type="file" accept="image/*" capture="environment" onchange="previewNoteImage()"><div class="hint">يمكنك تصوير شهادة/تكريم مباشرة أو اختيار صورة من الهاتف. الحد الأقصى 10 MB.</div><div id="n_image_preview"></div></div><button class="btn" onclick="saveStudentNote()">حفظ وإرسال لولي الأمر</button></div></div>`);
 }

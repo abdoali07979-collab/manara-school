@@ -11,22 +11,22 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="المنارة">
   <title>مدرسة المنارة</title>
-  <link rel="stylesheet" href="ios-style.css?v=6110">
-  <link rel="manifest" href="ios-manifest.webmanifest?v=6110">
-  <link rel="apple-touch-icon" href="apple-touch-icon.png?v=6110">
-  <link rel="icon" href="icon-192.png?v=6110" type="image/png">
+  <link rel="stylesheet" href="ios-style.css?v=6120">
+  <link rel="manifest" href="ios-manifest.webmanifest?v=6120">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png?v=6120">
+  <link rel="icon" href="icon-192.png?v=6120" type="image/png">
 </head>
 <body>
   <div id="app"></div>
-  <script src="ios-supabase.js?v=6110"></script>
-  <script src="ios-config.js?v=6110"></script>
+  <script src="ios-supabase.js?v=6120"></script>
+  <script src="ios-config.js?v=6120"></script>
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
-  <script src="ios-app.js?v=6110"></script>
+  <script src="ios-app.js?v=6120"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', async () => {
         try {
-          const reg = await navigator.serviceWorker.register('./ios-sw.js?v=6110', { updateViaCache: 'none' });
+          const reg = await navigator.serviceWorker.register('./ios-sw.js?v=6120', { updateViaCache: 'none' });
           await reg.update();
         } catch (_) {}
       });
