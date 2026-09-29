@@ -7,8 +7,8 @@ const LOGIN_REMEMBER_KEY = 'almanara_login_remember';
 const PARENT_CODE_KEY = 'manara_parent_saved_code';
 const FCM_TOKEN_KEY = 'manara_fcm_token';
 const PUBLIC_PARENT_PORTAL_URL = 'https://abdoali07979-collab.github.io/manara-school/';
-const APP_VERSION_CODE = 16;
-const APP_VERSION_LABEL = '6.12';
+const APP_VERSION_CODE = 17;
+const APP_VERSION_LABEL = '6.13';
 const UPDATE_CACHE_KEY = 'manara_android_update_config_v1';
 let sb = null;
 let state = { screen:'parent', user:null, role:null, tab:'home', portal:null, data:null, sidebar:false, loginNotice:'', portalPoll:null, pendingAuthUser:null, pendingAuthProfile:null, mfaEnroll:null };
@@ -1088,7 +1088,7 @@ async function saveMoveStudent(id){const room=document.getElementById('move_room
 
 function page_buildings(){
   if(state.role!=='admin')return noAccess();
-  const sorted=(state.data.rooms||[]).slice().sort((a,b)=>String(a.grade||'').localeCompare(String(b.grade||''),'ar')||String(a.section_label||'').localeCompare(String(b.section_label||''),'ar'));
+  const sorted=(state.data.rooms||[]).slice().sort(v613RoomCompare);
   const rows=sorted.map(r=>{const f=state.data.floors.find(x=>x.id===r.floor_id),b=state.data.buildings.find(x=>x.id===f?.building_id),count=state.data.students.filter(st=>String(st.room_id)===String(r.id)).length,names=v68TeacherNamesForRoom(r.id);return `<tr><td><b>${esc(b?.name||'')}</b></td><td>${esc(r.grade||'—')}</td><td>${esc(r.section_label||'—')}</td><td>${count}</td><td>${names.map(n=>`<span class="badge teacher" style="margin:2px">${esc(n)}</span>`).join('')||'<span class="badge warning">لا يوجد مدرس</span>'}</td><td><div class="row"><button class="btn small secondary" onclick="openRoomModal('${r.id}')">تعديل</button><button class="btn small danger" onclick="deleteRoom('${r.id}')">حذف</button></div></td></tr>`}).join('');
   const teacherCards=(state.data.teachers||[]).map(t=>`<div class="card"><div class="row between"><b>${esc(t.full_name)}</b><span class="badge ${t.active===false?'inactive':'active'}">${t.active===false?'موقوف':'فعال'}</span></div><div class="hint" style="margin-top:8px">${assignedRoomIds(t.id).map(id=>roomLocation(id)).join(' • ')||'لم تحدد شعب لهذا الحساب'}</div></div>`).join('');
   return `<div class="toolbar"><div><h2 class="section-title">الصفوف والشعب</h2><div class="muted">كل شعبة مرتبة مع أسماء حسابات المدرسين المخصصة لها.</div></div><button class="btn" onclick="openRoomModal()">+ إضافة صف / شعبة</button></div><div class="card"><div class="table-wrap"><table><thead><tr><th>القسم</th><th>الصف</th><th>الشعبة</th><th>الطلاب</th><th>المدرسون / الحسابات</th><th>إجراء</th></tr></thead><tbody>${rows||'<tr><td colspan="6" class="empty">لا توجد شعب</td></tr>'}</tbody></table></div></div><div class="section"><h3 class="section-title">حسابات المدرسين وتوزيع الشعب</h3><div class="building-grid">${teacherCards||'<div class="card empty">لا يوجد مدرسون</div>'}</div></div>`;
@@ -1552,3 +1552,88 @@ function openNoteModal(studentId=''){
   const selected=students.find(st=>String(st.id)===String(studentId))||students[0];
   document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="modal"><div class="modalbox"><div class="row between"><div><h2 class="section-title">إضافة ملاحظة على الطالب</h2><div class="muted">${state.role==='teacher'?'الملاحظة ستُرسل لولي أمر الطالب مباشرة، ويمكنك اختيار طلاب شعبك فقط.':'كل ملاحظة هنا تصل إلزامياً إلى بوابة ولي الأمر المرتبطة بكود الطالب وتُسجل كإشعار غير مقروء.'}</div></div><button class="btn outline" onclick="closeModal()">إغلاق</button></div><div id="modalMsg"></div><div class="section"><div class="field"><label>بحث عن الطالب</label><input id="n_student_search" autocomplete="off" placeholder="اكتب اسم الطالب أو الكنية..." oninput="filterNoteStudentSelect()"><div id="n_student_count" class="hint">${students.length} طالب</div></div></div><div class="mini-grid section"><div class="field"><label>الطالب *</label><select id="n_student" onchange="updateNoteStudentCode()">${students.map(st=>`<option value="${st.id}" ${String(selected?.id||'')===String(st.id)?'selected':''}>${esc(v612StudentDisplayName(st))} — ${esc(st.access_code||'')}</option>`).join('')}</select></div><div class="field"><label>كود الطالب *</label><input id="n_code" readonly value="${esc(selected?.access_code||'')}"></div><div class="field"><label>التصنيف</label><select id="n_category"><option>ملاحظة عامة</option><option>سلوك</option><option>دراسة</option><option>التزام</option><option>تميز</option><option>تنبيه</option><option>تكريم</option><option>شهادة</option></select></div><div class="field"><label>الأهمية</label><select id="n_importance"><option>عادي</option><option>مهم</option></select></div></div><div class="message ok">🔔 الإرسال لولي الأمر إجباري لهذه الملاحظات.</div><div class="field"><label>عنوان الملاحظة *</label><input id="n_title" placeholder="مثال: تكريم الطالب أو شهادة تقدير"></div><div class="field"><label>نص الملاحظة *</label><textarea id="n_content" placeholder="اكتب الملاحظة التي تريد أن تصل إلى ولي الأمر..."></textarea></div><div class="field"><label>صورة مرفقة (اختياري)</label><input id="n_image" type="file" accept="image/*" capture="environment" onchange="previewNoteImage()"><div class="hint">يمكنك تصوير شهادة/تكريم مباشرة أو اختيار صورة من الهاتف. الحد الأقصى 10 MB.</div><div id="n_image_preview"></div></div><button class="btn" onclick="saveStudentNote()">حفظ وإرسال لولي الأمر</button></div></div>`);
 }
+
+/* =========================================================
+   MANARA V6.13 — teacher move/delete + professional class sorting
+   ONLY these requested changes are added here.
+   ========================================================= */
+function v613ArabicOrdinalNumber(value=''){
+  const s=String(value||'').trim().replace(/[أإآ]/g,'ا').replace(/ى/g,'ي');
+  const map=[
+    ['الاول',1],['اول',1],['1',1],['١',1],
+    ['الثاني',2],['ثاني',2],['2',2],['٢',2],
+    ['الثالث',3],['ثالث',3],['3',3],['٣',3],
+    ['الرابع',4],['رابع',4],['4',4],['٤',4],
+    ['الخامس',5],['خامس',5],['5',5],['٥',5],
+    ['السادس',6],['سادس',6],['6',6],['٦',6],
+    ['السابع',7],['سابع',7],['7',7],['٧',7],
+    ['الثامن',8],['ثامن',8],['8',8],['٨',8],
+    ['التاسع',9],['تاسع',9],['9',9],['٩',9],
+    ['العاشر',10],['عاشر',10],['10',10],['١٠',10],
+    ['الحادي عشر',11],['حادي عشر',11],['11',11],['١١',11],
+    ['الثاني عشر',12],['ثاني عشر',12],['12',12],['١٢',12]
+  ];
+  for(const [k,n] of map){if(s===k||s.includes('الصف '+k)||s.includes(k))return n;}
+  const m=s.match(/\d+/);return m?Number(m[0]):999;
+}
+function v613SectionNumber(value=''){
+  const s=String(value||'').trim().replace(/[أإآ]/g,'ا').replace(/ى/g,'ي');
+  const n=v613ArabicOrdinalNumber(s);if(n!==999)return n;
+  const m=s.match(/\d+/);return m?Number(m[0]):999;
+}
+function v613RoomCompare(a,b){
+  const ga=v613ArabicOrdinalNumber(a?.grade),gb=v613ArabicOrdinalNumber(b?.grade);
+  if(ga!==gb)return ga-gb;
+  const sa=v613SectionNumber(a?.section_label||a?.name),sb=v613SectionNumber(b?.section_label||b?.name);
+  if(sa!==sb)return sa-sb;
+  return String(a?.section_label||a?.name||'').localeCompare(String(b?.section_label||b?.name||''),'ar',{numeric:true,sensitivity:'base'});
+}
+function v610VisibleRooms(){
+  let rooms=(state.data.rooms||[]).slice();
+  if(state.role==='teacher'){
+    const allowed=new Set(assignedRoomIds().map(String));
+    rooms=rooms.filter(r=>allowed.has(String(r.id)));
+  }
+  return rooms.sort(v613RoomCompare);
+}
+function v613AllRoomOptions(selected=''){
+  const rooms=(state.data.rooms||[]).slice().sort(v613RoomCompare);
+  return `<option value="">— اختر الصف والشعبة —</option>`+rooms.map(r=>{
+    const f=(state.data.floors||[]).find(x=>String(x.id)===String(r.floor_id));
+    const b=(state.data.buildings||[]).find(x=>String(x.id)===String(f?.building_id));
+    const label=`${r.grade||'—'} — ${r.section_label||r.name||'شعبة'}`;
+    return `<option value="${r.id}" ${String(selected)===String(r.id)?'selected':''}>${esc(label)}${b?.name?` — ${esc(b.name)}`:''}</option>`;
+  }).join('');
+}
+function openMoveStudentModal(id){
+  if(!['admin','teacher'].includes(state.role))return alert('غير مصرح لك بنقل الطلاب.');
+  const st=(state.data.students||[]).find(x=>String(x.id)===String(id));if(!st)return;
+  if(state.role==='teacher'&&!assignedRoomIds().map(String).includes(String(st.room_id)))return alert('هذا الطالب ليس ضمن شعبك المخصصة.');
+  const note=state.role==='teacher'
+    ? 'يمكنك نقل هذا الطالب فقط إلى أي شعبة موجودة في الإدارة. هذه الصلاحية لا تتيح لك مشاهدة طلاب الشعب الأخرى.'
+    : 'اختر الشعبة الجديدة للطالب. ستبقى بقية بياناته كما هي.';
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="modal"><div class="modalbox" style="max-width:680px"><div class="row between"><div><h2 class="section-title">نقل الطالب</h2><div class="muted">${esc(v612StudentDisplayName(st))} — حالياً: ${esc(st.grade||'')} / ${esc(st.class_name||'')}</div></div><button class="btn outline" onclick="closeModal()">إغلاق</button></div><div class="message ok">${esc(note)}</div><div class="field"><label>الشعبة الجديدة *</label><select id="move_room">${v613AllRoomOptions(st.room_id||'')}</select></div><div id="modalMsg"></div><button class="btn" onclick="saveMoveStudent('${id}')">تأكيد النقل</button></div></div>`);
+}
+function studentTableHtml(q=''){
+  q=String(q||'').trim().toLowerCase();
+  const rows=v612SortedStudents(state.data.students||[]).filter(st=>!q||[v612StudentDisplayName(st),st.father_name,st.grandfather_name,st.family_name,st.parent_phone,st.access_code,st.grade,st.class_name,st.building_name,st.floor_name,st.room_name,roomLocation(st.room_id)].some(v=>String(v||'').toLowerCase().includes(q)));
+  return `<div class="table-wrap"><table><thead><tr><th>الطالب</th><th>الأب</th><th>الجد</th><th>الصف</th><th>الموقع</th><th>الكود</th><th>الحالة</th><th>إجراء</th></tr></thead><tbody>${rows.map(st=>`<tr><td><b>${esc(v612StudentDisplayName(st))}</b><div style="margin-top:5px">${v612WhatsAppPhoneHtml(st.parent_phone||'')}</div></td><td>${esc(st.father_name||'—')}</td><td><b>${esc(st.grandfather_name||'—')}</b></td><td>${esc(st.grade||'—')} ${st.class_name?`/ ${esc(st.class_name)}`:''}</td><td>${esc(st.location_label||roomLocation(st.room_id))}</td><td><span class="code">${esc(st.access_code||'')}</span></td><td><span class="badge ${st.active===false?'inactive':'active'}">${st.active===false?'موقوف':'فعال'}</span></td><td>${state.role==='admin'?`<div class="row"><button class="btn small secondary" onclick="openStudentModal('${st.id}')">تعديل</button><button class="btn small warning" onclick="openMoveStudentModal('${st.id}')">نقل</button><button class="btn small warning" onclick="regenerateCode('${st.id}')">كود جديد</button><button class="btn small secondary" onclick="showStudentQr('${st.id}')">QR</button><button class="btn small" onclick="openNoteModal('${st.id}')">ملاحظة</button><button class="btn small danger" onclick="deleteStudent('${st.id}')">حذف</button></div>`:`<div class="row"><button class="btn small secondary" onclick="openStudentModal('${st.id}')">تعديل</button><button class="btn small warning" onclick="openMoveStudentModal('${st.id}')">نقل</button><button class="btn small secondary" onclick="showStudentQr('${st.id}')">QR</button><button class="btn small" onclick="openNoteModal('${st.id}')">ملاحظة للأهل</button><button class="btn small danger" onclick="deleteStudent('${st.id}')">حذف</button></div>`}</td></tr>`).join('')||'<tr><td colspan="8" class="empty">لا توجد نتائج</td></tr>'}</tbody></table></div>`;
+}
+function v610StudentInfoCard(st){
+  const adminActions=state.role==='admin'?`<button class="btn small warning" onclick="v610FolderAction('move','${st.id}')">نقل / ترقية</button>`:'';
+  const teacherActions=state.role==='teacher'?`<button class="btn small warning" onclick="v610FolderAction('move','${st.id}')">نقل</button><button class="btn small danger" onclick="v610FolderAction('delete','${st.id}')">حذف</button>`:'';
+  const actions=`<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:12px"><button class="btn small secondary" onclick="v610FolderAction('edit','${st.id}')">تعديل</button>${adminActions}${teacherActions}<button class="btn small secondary" onclick="v610FolderAction('qr','${st.id}')">QR</button><button class="btn small" onclick="v610FolderAction('report','${st.id}')">تقرير PDF</button><button class="btn small" onclick="v610FolderAction('note','${st.id}')">ملاحظة</button></div>`;
+  return `<div class="card" style="margin-bottom:12px"><div style="display:flex;gap:12px;align-items:flex-start">${v610StudentAvatarHtml(st)}<div style="flex:1;min-width:0"><div class="row between" style="align-items:flex-start;gap:10px"><div><b style="font-size:17px">${esc(v612StudentDisplayName(st))}</b><div class="hint">${esc(st.access_code||'—')}</div></div><span class="badge ${st.active===false?'inactive':'active'}">${st.active===false?'موقوف':'فعال'}</span></div><div class="mini-grid" style="margin-top:12px"><div><b>اسم الأب:</b> ${esc(st.father_name||'—')}</div><div><b>اسم الأم:</b> ${esc(st.mother_name||'—')}</div><div><b>اسم الجد:</b> ${esc(st.grandfather_name||'—')}</div><div><b>تاريخ الميلاد:</b> ${esc(st.date_of_birth||'—')}</div><div><b>ولي الأمر:</b> ${v612WhatsAppPhoneHtml(st.parent_phone||'')}</div><div><b>العنوان:</b> ${esc(st.address||'—')}</div><div><b>رقم السيارة:</b> ${esc(st.transport_car_number||'—')}</div><div><b>الصورة الشخصية:</b> ${st.photo_path?'محفوظة ✓':'غير مضافة'}</div></div>${st.notes?`<div class="hint" style="margin-top:9px"><b>ملاحظة:</b> ${esc(st.notes)}</div>`:''}${actions}</div></div></div>`;
+}
+function v610FolderAction(action,id){
+  closeModal();
+  setTimeout(()=>{
+    if(action==='edit')openStudentModal(id);
+    else if(action==='move')openMoveStudentModal(id);
+    else if(action==='delete')deleteStudent(id);
+    else if(action==='qr')showStudentQr(id);
+    else if(action==='report')openStudentReport(id);
+    else if(action==='note')openNoteModal(id);
+  },40);
+}
+
