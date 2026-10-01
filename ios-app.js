@@ -7,8 +7,8 @@ const LOGIN_REMEMBER_KEY = 'almanara_login_remember';
 const PARENT_CODE_KEY = 'manara_parent_saved_code';
 const FCM_TOKEN_KEY = 'manara_fcm_token';
 const PUBLIC_PARENT_PORTAL_URL = 'https://abdoali07979-collab.github.io/manara-school/';
-const APP_VERSION_CODE = 18;
-const APP_VERSION_LABEL = '6.14';
+const APP_VERSION_CODE = 20;
+const APP_VERSION_LABEL = '6.15.1';
 const UPDATE_CACHE_KEY = 'manara_android_update_config_v1';
 let sb = null;
 let state = { screen:'parent', user:null, role:null, tab:'home', portal:null, data:null, sidebar:false, loginNotice:'', portalPoll:null, pendingAuthUser:null, pendingAuthProfile:null, mfaEnroll:null };
@@ -1805,3 +1805,246 @@ findStudentPortal=async function(auto=false){
   if(!(await v614CheckScopedUpdate('parent')))return;
   return v614FindStudentPortalBase(auto);
 };
+
+
+/* =========================================================
+   MANARA V6.15 — Daily absent list + automatic durable archive
+   - New daily-only tab: "غائبو اليوم".
+   - The daily tab is date-scoped, so every new day starts empty.
+   - Every saved absence is archived by the database trigger immediately.
+   - Monthly inventory shows a daily absence archive for the selected month.
+   - Annual archive shows the daily absence archive for the selected school year.
+   ========================================================= */
+
+function v615MonthBounds(month){
+  const m=String(month||today().slice(0,7)).match(/^(\d{4})-(\d{2})$/);
+  if(!m)return {start:today().slice(0,7)+'-01',end:today()};
+  const y=Number(m[1]),mo=Number(m[2]),ny=mo===12?y+1:y,nm=mo===12?1:mo+1;
+  const next=`${ny}-${String(nm).padStart(2,'0')}-01`;
+  const endDate=new Date(next+'T00:00:00');endDate.setDate(endDate.getDate()-1);
+  return {start:`${y}-${String(mo).padStart(2,'0')}-01`,end:endDate.toISOString().slice(0,10)};
+}
+function v615AcademicYearBounds(label){
+  const m=String(label||'').match(/(\d{4})\D+(\d{4})/);
+  if(m)return {start:`${m[1]}-09-01`,end:`${m[2]}-08-31`};
+  const current=v68AcademicYearForDate(today()).match(/(\d{4})\D+(\d{4})/);
+  return current?{start:`${current[1]}-09-01`,end:`${current[2]}-08-31`}:{start:today().slice(0,4)+'-01-01',end:today().slice(0,4)+'-12-31'};
+}
+function v615DemoArchiveRows(start,end,roomId=''){
+  const students=state.data.students||[];
+  return (state.data.attendance||[]).filter(a=>a.status==='غائب'&&a.date>=start&&a.date<=end).map(a=>{
+    const s=students.find(x=>String(x.id)===String(a.student_id));
+    if(!s)return null;
+    return {student_id:s.id,absence_date:a.date,student_name:v612StudentDisplayName(s),father_name:s.father_name||'',grandfather_name:s.grandfather_name||'',grade:s.grade||'',class_name:s.class_name||'',room_id:s.room_id||null,location_label:s.location_label||roomLocation(s.room_id),note:a.note||'',academic_year:v68AcademicYearForDate(a.date),month_key:String(a.date||'').slice(0,7)};
+  }).filter(r=>r&&(!roomId||String(r.room_id)===String(roomId)));
+}
+async function v615FetchAbsenceArchive(start,end,roomId=''){
+  if(DEMO)return v615DemoArchiveRows(start,end,roomId);
+  let rows=[],from=0;const size=1000,maxRows=50000;
+  while(from<maxRows){
+    let q=sb.from('absence_archive').select('student_id,absence_date,student_name,father_name,grandfather_name,grade,class_name,room_id,location_label,note,academic_year,month_key,archived_at').gte('absence_date',start).lte('absence_date',end).order('absence_date',{ascending:false}).order('student_name',{ascending:true}).range(from,from+size-1);
+    if(roomId)q=q.eq('room_id',roomId);
+    const {data,error}=await q;if(error)throw error;
+    const batch=data||[];rows.push(...batch);if(batch.length<size)break;from+=size;
+  }
+  return rows;
+}
+function v615ArchiveGroups(rows){
+  const groups=new Map();
+  for(const r of (rows||[])){
+    const d=String(r.absence_date||'');if(!d)continue;
+    if(!groups.has(d))groups.set(d,[]);groups.get(d).push(r);
+  }
+  return [...groups.entries()].sort((a,b)=>b[0].localeCompare(a[0])).map(([date,list])=>({date,list:list.slice().sort((a,b)=>String(a.student_name||'').localeCompare(String(b.student_name||''),'ar',{sensitivity:'base'}))}));
+}
+function v615GroupedArchiveTable(rows,emptyText='لا يوجد غياب محفوظ ضمن هذه الفترة'){
+  const groups=v615ArchiveGroups(rows);
+  return `<div class="table-wrap"><table><thead><tr><th>التاريخ</th><th>عدد الغائبين</th><th>الطلاب الغائبون</th><th>الصف / الشعبة</th></tr></thead><tbody>${groups.map(g=>`<tr><td><b>${esc(g.date)}</b></td><td><span class="badge absent">${g.list.length}</span></td><td>${g.list.map(r=>`<div style="margin:3px 0">• <b>${esc(r.student_name||'—')}</b>${r.note?` <span class="muted">— ${esc(r.note)}</span>`:''}</div>`).join('')}</td><td>${g.list.map(r=>`<div style="margin:3px 0">${esc(r.grade||'—')} ${r.class_name?`/ ${esc(r.class_name)}`:''}</div>`).join('')}</td></tr>`).join('')||`<tr><td colspan="4" class="empty">${esc(emptyText)}</td></tr>`}</tbody></table></div>`;
+}
+async function v615LoadDailyArchive(force=false){
+  const day=today();
+  if(state.v615DailyLoading)return;
+  if(!force&&state.v615DailyDate===day&&Array.isArray(state.v615DailyRows))return;
+  state.v615DailyLoading=true;
+  try{state.v615DailyRows=await v615FetchAbsenceArchive(day,day);state.v615DailyDate=day;state.v615DailyError='';}
+  catch(e){state.v615DailyRows=[];state.v615DailyDate=day;state.v615DailyError=authErrorArabic(e.message);}
+  finally{state.v615DailyLoading=false;if(state.tab==='dailyabsence')render();}
+}
+function page_dailyabsence(){
+  if(!['admin','teacher'].includes(state.role))return noAccess();
+  const day=today();if(state.v615DailyDate!==day&&!state.v615DailyLoading)setTimeout(()=>v615LoadDailyArchive(),0);
+  const rows=state.v615DailyDate===day?(state.v615DailyRows||[]):[];
+  const loading=state.v615DailyLoading||state.v615DailyDate!==day;
+  const error=state.v615DailyError?`<div class="message error">تعذر تحميل غائبي اليوم: ${esc(state.v615DailyError)}</div>`:'';
+  return `<div class="toolbar"><div><h2 class="section-title">غائبو اليوم</h2><div class="muted">قائمة يومية مستقلة بتاريخ <b>${esc(day)}</b>. مع بداية يوم جديد تبدأ هذه الخانة فارغة تلقائياً.</div></div><div class="row"><span class="badge absent">${rows.length} غائب</span><button class="btn secondary" onclick="v615LoadDailyArchive(true)">↻ تحديث</button><button class="btn" onclick="setTab('attendance')">+ تسجيل غياب</button></div></div><div class="message ok">أي غياب تحفظه يُضاف فوراً إلى الجرد الشهري والأرشيف السنوي. لا يوجد ترحيل يدوي ولا حاجة لفتح التطبيق عند نهاية اليوم.</div>${error}<div class="card section">${loading?'<div class="empty">جاري تحميل غائبي اليوم...</div>':`<div class="table-wrap"><table><thead><tr><th>الطالب الغائب</th><th>الصف / الشعبة</th><th>الموقع</th><th>ملاحظة</th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${esc(r.student_name||'—')}</b></td><td>${esc(r.grade||'—')} ${r.class_name?`/ ${esc(r.class_name)}`:''}</td><td>${esc(r.location_label||'—')}</td><td>${esc(r.note||'—')}</td></tr>`).join('')||'<tr><td colspan="4" class="empty">لا يوجد أي طالب غائب مسجل اليوم</td></tr>'}</tbody></table></div>`}</div>`;
+}
+
+function navItems(){
+  if(state.role==='teacher') return [
+    ['home','⌂','الرئيسية'],['buildings','▦','الصفوف والشعب'],['students','♟','طلابي'],['attendance','×','تسجيل الغياب'],['dailyabsence','☷','غائبو اليوم'],['grades','▤','النتائج'],['reports','▥','الجرد الشهري'],['notes','✎','ملاحظات الطلاب']
+  ];
+  return [
+    ['home','⌂','الرئيسية'],['buildings','▦','الصفوف والشعب'],['students','♟','الطلاب'],['attendance','×','تسجيل الغياب'],['dailyabsence','☷','غائبو اليوم'],['reports','▥','الجرد الشهري'],['archive','▧','الأرشيف السنوي'],['notes','✎','ملاحظات الطلاب'],['grades','▤','النتائج'],['announcements','◉','الإعلانات'],['teachers','♙','المدرسون'],['audit','≡','سجل العمليات'],['settings','⚙','الإعدادات']
+  ];
+}
+function setTab(t){
+  state.tab=t;state.sidebar=false;
+  if(t==='dailyabsence'){state.v615DailyDate='';state.v615DailyRows=[];state.v615DailyError='';}
+  if(t==='archive'){state.v615AnnualAbsenceYear='';state.v615AnnualAbsenceRows=[];state.v615AnnualAbsenceError='';}
+  render();
+}
+function appPage(){
+  const labels={home:'الرئيسية',buildings:'الصفوف والشعب',students:'الطلاب',attendance:'تسجيل الغياب',dailyabsence:'غائبو اليوم',reports:'الجرد الشهري',archive:'الأرشيف السنوي',notes:'ملاحظات الطلاب',grades:'النتائج',announcements:'الإعلانات',teachers:'إدارة المدرسين',audit:'سجل العمليات',settings:'الإعدادات'};
+  if(state.role==='teacher'&&!['home','buildings','students','attendance','dailyabsence','grades','reports','notes'].includes(state.tab))state.tab='home';
+  const topLogo=logo().replace('<img','<img class="top-logo"'),watermark=logo().replace('<img','<img class="content-watermark"');
+  return `<div class="app-shell"><aside class="sidebar ${state.sidebar?'open':''}"><div class="side-brand">${logo()}<div><b>${esc(state.data?.settings?.school_name||'مدرسة المنارة الخاصة')}</b><small>MANARA PRIVATE SCHOOL</small></div><button class="drawer-close" onclick="toggleSidebar(false)" aria-label="إغلاق">×</button></div><div class="user-card"><b>${esc(state.user?.name||'')}</b><small>${state.role==='admin'?'مدير النظام — تحكم كامل':'مدرس — طلاب + غياب + نتائج + ملاحظات ضمن الشعب المخصصة'}</small></div><div class="side-label">القائمة الرئيسية</div><nav class="side-nav">${navItems().map(n=>`<button class="${state.tab===n[0]?'active':''}" onclick="setTab('${n[0]}')"><i class="nav-icon">${n[1]}</i>${n[2]}</button>`).join('')}</nav><div class="side-label" style="margin-top:16px">الحساب</div><nav class="side-nav"><button onclick="goParent()"><i class="nav-icon">◫</i>معاينة بوابة الأهل</button><button onclick="logout()"><i class="nav-icon">↪</i>تسجيل الخروج</button></nav></aside><div class="drawer-backdrop ${state.sidebar?'show':''}" onclick="toggleSidebar(false)"></div><main class="main"><header class="topbar"><div class="row"><button class="btn outline mobile-menu" onclick="toggleSidebar()">☰</button><div class="page-title"><b>${labels[state.tab]||''}</b><small>${state.role==='admin'?'لوحة الإدارة الرئيسية':'طلابك وشعبك فقط'}</small></div></div>${topLogo}<div class="top-actions"><span class="badge ${state.role}">${state.role==='admin'?'الإدارة':'مدرس'}</span></div></header><section class="content">${watermark}${pageContent()}</section></main></div>`;
+}
+function page_home(){
+  const d=state.data||{},todayAbs=(d.attendance||[]).filter(x=>x.date===today()&&x.status==='غائب');
+  if(state.role==='teacher'){
+    return `<div class="role-note">حسابك يبقى مسجلاً حتى تضغط «تسجيل الخروج». صلاحيتك محصورة بالشعب التي حددتها الإدارة.</div><div class="kpi-grid section"><div class="card kpi"><div><b>الطلاب المسموحون</b><strong>${d.students?.length||0}</strong></div><div class="kpi-icon">♟</div></div><div class="card kpi"><div><b>غائب اليوم</b><strong>${todayAbs.length}</strong></div><div class="kpi-icon">×</div></div><div class="card kpi"><div><b>الشعب المخصصة</b><strong>${assignedRoomIds().length}</strong></div><div class="kpi-icon">▦</div></div><div class="card kpi"><div><b>النتائج المسجلة</b><strong>${(d.grades||[]).length}</strong></div><div class="kpi-icon">▤</div></div></div><div class="two-col section"><div class="card"><div class="row between"><div><h3 class="section-title">غائبو اليوم</h3><div class="muted">قائمة مستقلة تتجدد تلقائياً كل يوم.</div></div><button class="btn" onclick="setTab('dailyabsence')">عرض غائبي اليوم</button></div></div><div class="card"><div class="row between"><div><h3 class="section-title">تسجيل الغياب</h3><div class="muted">سجّل الطلاب الغائبين فقط.</div></div><button class="btn secondary" onclick="setTab('attendance')">فتح التسجيل</button></div></div></div><div class="card section"><div class="row between"><div><h3 class="section-title">الجرد الشهري</h3><div class="muted">يتضمن الآن سجل الغياب اليومي المحفوظ تلقائياً.</div></div><button class="btn secondary" onclick="setTab('reports')">فتح الجرد</button></div></div>`;
+  }
+  const s=d.dashboardStats||{},unread=(d.notifications||[]).filter(n=>!n.seen_at).length;
+  return `<div class="kpi-grid"><div class="card kpi"><div><b>إجمالي الطلاب</b><strong>${moneyLike(s.total_students??d.students?.length)}</strong></div><div class="kpi-icon">♟</div></div><div class="card kpi"><div><b>غائب اليوم</b><strong>${moneyLike(todayAbs.length)}</strong></div><div class="kpi-icon">×</div></div><div class="card kpi"><div><b>إجمالي الشعب</b><strong>${moneyLike((d.rooms||[]).length)}</strong></div><div class="kpi-icon">▦</div></div><div class="card kpi"><div><b>إشعارات أهل غير مقروءة</b><strong>${moneyLike(unread)}</strong></div><div class="kpi-icon">🔔</div></div></div><div class="two-col section"><div class="card"><h3 class="section-title">الغياب اليوم</h3><div class="stack"><div class="row between"><span>عدد الطلاب الغائبين</span><b>${moneyLike(todayAbs.length)}</b></div><div class="row between"><span>أكثر شعبة غياباً</span><b>${esc(s.most_absent_room||'—')} ${Number(s.most_absent_room_count||0)?`(${s.most_absent_room_count})`:''}</b></div><div class="row between"><span>غياب هذا الشهر</span><b>${moneyLike(s.current_month_absent||0)}</b></div><button class="btn" onclick="setTab('dailyabsence')">عرض غائبي اليوم</button></div></div><div class="card"><h3 class="section-title">اختصارات</h3><div class="stack"><button class="btn" onclick="setTab('attendance')">تسجيل الغياب</button><button class="btn secondary" onclick="setTab('reports')">الجرد الشهري والمجاميع</button><button class="btn secondary" onclick="setTab('archive')">الأرشيف السنوي</button></div></div></div>`;
+}
+
+async function loadMonthlyReport(){
+  const month=document.getElementById('reportMonth')?.value||today().slice(0,7),room=document.getElementById('reportRoom')?.value||'';state.reportMonth=month;state.reportRoom=room;state.v615MonthlyAbsenceLoading=true;state.v615MonthlyAbsenceError='';
+  try{
+    const bounds=v615MonthBounds(month);
+    if(DEMO){
+      state.monthlyReport=(state.data.students||[]).filter(s=>!room||String(s.room_id)===String(room)).map(s=>({student_id:s.id,student_name:v612StudentDisplayName(s),grade:s.grade,class_name:s.class_name,present_count:0,absent_count:(state.data.attendance||[]).filter(a=>String(a.student_id)===String(s.id)&&a.status==='غائب'&&a.date>=bounds.start&&a.date<=bounds.end).length,late_count:0,monthly_score:0,monthly_max:0,term1_score:0,term1_max:0,term2_score:0,term2_max:0,year_score:0,year_max:0}));
+      state.v615MonthlyAbsenceRows=await v615FetchAbsenceArchive(bounds.start,bounds.end,room);state.v615MonthlyAbsenceKey=`${month}|${room}`;render();return;
+    }
+    const [inv,archiveRows]=await Promise.all([sb.rpc('report_monthly_inventory',{p_month:month+'-01',p_room_id:room||null}),v615FetchAbsenceArchive(bounds.start,bounds.end,room)]);
+    if(inv.error)throw inv.error;state.monthlyReport=inv.data||[];state.v615MonthlyAbsenceRows=archiveRows;state.v615MonthlyAbsenceKey=`${month}|${room}`;
+  }catch(e){state.v615MonthlyAbsenceError=authErrorArabic(e.message);alert('تعذر تحميل الجرد: '+state.v615MonthlyAbsenceError);}
+  finally{state.v615MonthlyAbsenceLoading=false;render();}
+}
+function page_reports(){
+  if(!['admin','teacher'].includes(state.role))return noAccess();const month=state.reportMonth||today().slice(0,7),room=state.reportRoom||'',rows=state.monthlyReport||[],key=`${month}|${room}`,archiveReady=state.v615MonthlyAbsenceKey===key,archiveRows=archiveReady?(state.v615MonthlyAbsenceRows||[]):[];
+  const table=rows.length?`<div id="monthlyReportPrint" class="card section"><div style="text-align:center;margin-bottom:12px"><h2 style="margin:0">${esc(state.data.settings?.school_name||'مدرسة منارة العلم الخاصة')}</h2><div>الجرد الشهري — ${esc(month)} — السنة ${esc(v68AcademicYearForDate(month+'-01'))}</div></div><div class="table-wrap"><table><thead><tr><th>الطالب</th><th>الصف/الشعبة</th><th>الغياب</th><th>مجموع الشهر</th><th>الفصل الأول</th><th>الفصل الثاني</th><th>السنوي</th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${esc(r.student_name)}</b></td><td>${esc(r.grade||'')} / ${esc(r.class_name||'')}</td><td><b>${r.absent_count||0}</b></td><td>${v68Percent(r.monthly_score,r.monthly_max)}</td><td>${v68Percent(r.term1_score,r.term1_max)}</td><td>${v68Percent(r.term2_score,r.term2_max)}</td><td><b>${v68Percent(r.year_score,r.year_max)}</b></td></tr>`).join('')}</tbody></table></div><div class="section"><div class="row between"><div><h3 class="section-title">سجل الغياب اليومي للشهر</h3><div class="muted">كل يوم محفوظ تلقائياً فور تسجيل الغياب.</div></div><span class="badge absent">${archiveRows.length} حالة غياب</span></div>${v615GroupedArchiveTable(archiveRows,'لا يوجد غياب محفوظ في هذا الشهر')}</div></div>`:'<div class="card empty">اختر الشهر والشعبة ثم اضغط «عرض الجرد».</div>';
+  const err=state.v615MonthlyAbsenceError?`<div class="message error">${esc(state.v615MonthlyAbsenceError)}</div>`:'';
+  return `<div class="toolbar"><div><h2 class="section-title">الجرد الشهري والمجاميع</h2><div class="muted">${state.role==='teacher'?'يعرض فقط طلاب الشعب المخصصة لك.':'جرد شهري للغياب مع المجموع الفصلي والسنوي.'} تمت إضافة سجل الغياب اليومي المحفوظ تلقائياً.</div></div>${rows.length?`<button class="btn" onclick="printElement('monthlyReportPrint')">🖨 طباعة / PDF</button>`:''}</div><div class="card"><div class="row filters"><div class="field"><label>الشهر</label><input id="reportMonth" type="month" value="${esc(month)}"></div><div class="field"><label>الشعبة</label><select id="reportRoom">${reportRoomOptions()}</select></div><div class="field" style="align-self:end"><button class="btn" onclick="loadMonthlyReport()">${state.v615MonthlyAbsenceLoading?'جاري التحميل...':'عرض الجرد'}</button></div></div></div>${err}${table}`;
+}
+
+async function v615LoadAnnualAbsence(year,force=false){
+  if(state.v615AnnualAbsenceLoading)return;
+  if(!force&&state.v615AnnualAbsenceYear===year&&Array.isArray(state.v615AnnualAbsenceRows))return;
+  state.v615AnnualAbsenceLoading=true;state.v615AnnualAbsenceError='';
+  try{const b=v615AcademicYearBounds(year);state.v615AnnualAbsenceRows=await v615FetchAbsenceArchive(b.start,b.end);state.v615AnnualAbsenceYear=year;}
+  catch(e){state.v615AnnualAbsenceRows=[];state.v615AnnualAbsenceYear=year;state.v615AnnualAbsenceError=authErrorArabic(e.message);}
+  finally{state.v615AnnualAbsenceLoading=false;if(state.tab==='archive')render();}
+}
+function page_archive(){
+  if(state.role!=='admin')return noAccess();const years=(state.data.academicYears||[]).map(x=>x.label),current=state.archiveYear||state.data.settings?.academic_year||years[0]||'2026/2027';state.archiveYear=current;const rows=(state.data.studentYearRecords||[]).filter(x=>x.academic_year===current),active=rows.filter(x=>x.active!==false).length;
+  if(state.v615AnnualAbsenceYear!==current&&!state.v615AnnualAbsenceLoading)setTimeout(()=>v615LoadAnnualAbsence(current),0);
+  const archiveReady=state.v615AnnualAbsenceYear===current,absenceRows=archiveReady?(state.v615AnnualAbsenceRows||[]):[],err=state.v615AnnualAbsenceError?`<div class="message error">تعذر تحميل أرشيف الغياب: ${esc(state.v615AnnualAbsenceError)}</div>`:'';
+  return `<div class="toolbar"><div><h2 class="section-title">الأرشيف السنوي</h2><div class="muted">بيانات السنة الدراسية والغياب اليومي محفوظة بشكل مستقل.</div></div><div class="row"><button class="btn secondary" onclick="snapshotCurrentYear()">تثبيت السنة الحالية</button><button class="btn secondary" onclick="v615LoadAnnualAbsence('${esc(current)}',true)">↻ تحديث غياب السنة</button>${(rows.length||absenceRows.length)?`<button class="btn" onclick="printElement('archivePrint')">🖨 طباعة / PDF</button>`:''}</div></div><div class="message ok">أرشيف الغياب لا يحتاج إلى «تثبيت السنة»: كل حالة غياب تُحفظ تلقائياً فور تسجيلها وتبقى محفوظة حتى لو تغيرت بيانات الطالب لاحقاً.</div><div class="card"><div class="row filters"><div class="field"><label>السنة الدراسية</label><select onchange="state.archiveYear=this.value;state.v615AnnualAbsenceYear='';render()">${years.map(y=>`<option value="${esc(y)}" ${y===current?'selected':''}>${esc(y)}</option>`).join('')||`<option>${esc(current)}</option>`}</select></div><div class="hint">السنة النشطة حالياً: <b>${esc(state.data.settings?.academic_year||'—')}</b></div></div></div>${err}<div id="archivePrint"><div class="card section"><div style="text-align:center"><h2 style="margin:0">${esc(state.data.settings?.school_name||'مدرسة منارة العلم الخاصة')}</h2><div>أرشيف السنة الدراسية ${esc(current)}</div></div><div class="kpi-grid section"><div class="card kpi"><div><b>الطلاب في الأرشيف</b><strong>${rows.length}</strong></div></div><div class="card kpi"><div><b>الفعالون</b><strong>${active}</strong></div></div><div class="card kpi"><div><b>حالات الغياب المحفوظة</b><strong>${absenceRows.length}</strong></div></div></div><div class="table-wrap"><table><thead><tr><th>الطالب</th><th>الأب</th><th>الجد</th><th>الصف</th><th>الشعبة</th><th>الموقع</th><th>الكود</th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${esc(r.student_name)}</b></td><td>${esc(r.father_name||'—')}</td><td>${esc(r.grandfather_name||'—')}</td><td>${esc(r.grade||'—')}</td><td>${esc(r.class_name||'—')}</td><td>${esc(r.location_label||'—')}</td><td>${esc(r.access_code||'—')}</td></tr>`).join('')||'<tr><td colspan="7" class="empty">لا توجد سجلات طلاب لهذه السنة بعد.</td></tr>'}</tbody></table></div></div><div class="card section"><div class="row between"><div><h3 class="section-title">أرشيف الغياب اليومي للسنة</h3><div class="muted">مرتب حسب اليوم، ويعرض أسماء الغائبين كما حُفظت وقت تسجيل الغياب.</div></div><span class="badge absent">${absenceRows.length} حالة</span></div>${state.v615AnnualAbsenceLoading?'<div class="empty">جاري تحميل أرشيف الغياب...</div>':v615GroupedArchiveTable(absenceRows,'لا يوجد غياب محفوظ لهذه السنة')}</div></div>`;
+}
+
+
+/* =========================================================
+   MANARA V6.15.1 — Absence undo + daily parent-note dashboard
+   - A mistaken absence can be cancelled safely.
+   - Cancelling removes the attendance row AND its auto archive entry.
+   - New daily-only tab: "ملاحظات اليوم".
+   - Daily notes are the same student notes sent to parents.
+   - No monthly/yearly note archive is added.
+   ========================================================= */
+
+function v6151LocalDateKey(value){
+  if(!value)return '';
+  const d=new Date(value);
+  if(Number.isNaN(d.getTime()))return String(value).slice(0,10);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function v6151LocalTime(value){
+  if(!value)return '—';
+  const d=new Date(value);if(Number.isNaN(d.getTime()))return '—';
+  try{return d.toLocaleTimeString('ar-SY',{hour:'2-digit',minute:'2-digit'});}catch(_){return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;}
+}
+function v6151TodayNotes(){
+  const day=today(),allowedIds=new Set((state.data.students||[]).map(s=>String(s.id)));
+  return (state.data.studentNotes||[])
+    .filter(n=>(state.role==='admin'||allowedIds.has(String(n.student_id)))&&v6151LocalDateKey(n.created_at)===day)
+    .slice().sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
+}
+
+async function cancelAbsenceRow(studentId,date){
+  const st=(state.data.students||[]).find(s=>String(s.id)===String(studentId));
+  const name=st?v612StudentDisplayName(st):'الطالب';
+  if(!confirm(`إلغاء غياب ${name} بتاريخ ${date}؟\nسيتم تصحيح الجرد الشهري والأرشيف السنوي أيضاً.`))return;
+  try{
+    if(DEMO){
+      state.data.attendance=(state.data.attendance||[]).filter(x=>!(String(x.student_id)===String(studentId)&&x.date===date&&x.status==='غائب'));
+      saveDemo();
+    }else{
+      const {data,error}=await sb.rpc('cancel_absence_v6151',{p_student_id:String(studentId),p_date:date});
+      if(error)throw error;
+      if(data===false)throw new Error('لم يتم العثور على سجل غياب مطابق لإلغائه.');
+      await loadSupabaseData();
+    }
+    state.absenceSavedMessage='تم إلغاء الغياب بنجاح';
+    state.v615DailyDate='';state.v615DailyRows=[];state.v615DailyError='';
+    state.v615MonthlyAbsenceKey='';state.v615MonthlyAbsenceRows=[];
+    state.v615AnnualAbsenceYear='';state.v615AnnualAbsenceRows=[];
+    render();
+  }catch(e){alert('تعذر إلغاء الغياب: '+authErrorArabic(e.message));}
+}
+
+function page_attendance(){
+  const date=state.attDate||today(),roster=allowedAttendanceStudents(),records=v614AbsenceRowsForDate(date),bopts=(state.data.buildings||[]).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  const saved=state.absenceSavedMessage?`<div class="message ok"><b>${esc(state.absenceSavedMessage)}</b></div>`:'';
+  const absentTable=`<div class="table-wrap"><table><thead><tr><th>الطالب الغائب</th><th>الصف</th><th>الموقع</th><th>ملاحظة</th><th>إجراء</th></tr></thead><tbody>${records.map(r=>{const st=(state.data.students||[]).find(s=>String(s.id)===String(r.student_id));return st?`<tr><td><b>${esc(v612StudentDisplayName(st))}</b></td><td>${esc(st.grade||'—')} ${st.class_name?`/ ${esc(st.class_name)}`:''}</td><td>${esc(st.location_label||roomLocation(st.room_id))}</td><td>${esc(r.note||'—')}</td><td><button class="btn small danger" onclick="cancelAbsenceRow('${st.id}','${date}')">إلغاء الغياب</button></td></tr>`:''}).join('')||'<tr><td colspan="5" class="empty">لا يوجد غياب مسجل في هذا التاريخ</td></tr>'}</tbody></table></div>`;
+  return `${saved}<div class="toolbar"><div><h2 class="section-title">سجل الغياب</h2><div class="muted">سجّل الطالب الغائب فقط. وإذا تم التسجيل بالخطأ تستطيع إلغاء الغياب مباشرة.</div></div><div class="row"><div class="field" style="margin:0"><label>التاريخ</label><input id="attDate" type="date" value="${date}" onchange="changeAttDate(this.value)"></div></div></div><div class="card"><div class="toolbar"><div class="row filters"><div class="field search"><label>بحث</label><input id="attSearch" placeholder="اسم الطالب أو الصف" oninput="filterAttendanceRoster()"></div><div class="field"><label>القسم</label><select id="attBuilding" onchange="filterAttendanceRoster()"><option value="">كل الأقسام</option>${bopts}</select></div><div class="field"><label>الشعبة</label><select id="attRoom" onchange="filterAttendanceRoster()"><option value="">كل الشعب</option>${(state.data.rooms||[]).filter(r=>state.role!=='teacher'||assignedRoomIds().map(String).includes(String(r.id))).sort(v613RoomCompare).map(r=>`<option value="${r.id}">${esc(roomLocation(r.id))}</option>`).join('')}</select></div></div><div class="hint">اكتب الملاحظة إن وجدت ثم اضغط «حفظ الغياب» للطالب الغائب فقط.</div></div><div id="attRoster">${attendanceTableHtml(roster,records,'','','')}</div></div><div class="card section"><div class="row between"><h3 class="section-title">الغياب المسجل لهذا اليوم</h3><span class="badge absent">${records.length} غائب</span></div>${absentTable}</div>`;
+}
+function attendanceTableHtml(roster,records,q='',buildingId='',roomId=''){
+  q=String(q||'').trim().toLowerCase();
+  const rows=v612SortedStudents(roster||[]).filter(s=>{const r=state.data.rooms?.find(x=>String(x.id)===String(s.room_id)),f=state.data.floors?.find(x=>String(x.id)===String(r?.floor_id));return(!q||[v612StudentDisplayName(s),s.grade,s.class_name,roomLocation(s.room_id)].some(v=>String(v||'').toLowerCase().includes(q)))&&(!buildingId||String(f?.building_id)===String(buildingId))&&(!roomId||String(s.room_id)===String(roomId))});
+  return `<div class="table-wrap"><table><thead><tr><th>الطالب</th><th>الصف</th><th>الموقع</th><th>الحالة</th><th>ملاحظة</th><th>إجراء</th></tr></thead><tbody>${rows.map(s=>{const r=(records||[]).find(x=>String(x.student_id)===String(s.id));return `<tr><td><b>${esc(v612StudentDisplayName(s))}</b></td><td>${esc(s.grade||'—')}</td><td>${esc(s.location_label||roomLocation(s.room_id))}</td><td>${r?'<span class="badge absent">غائب ✓</span>':'<span class="muted">غير مسجل</span>'}</td><td><input id="note_${s.id}" value="${esc(r?.note||'')}" placeholder="اختياري"></td><td><div class="row" style="gap:6px;flex-wrap:wrap"><button class="btn small ${r?'secondary':''}" onclick="saveAttendanceRow('${s.id}')">${r?'تحديث الغياب':'حفظ الغياب'}</button>${r?`<button class="btn small danger" onclick="cancelAbsenceRow('${s.id}','${state.attDate||today()}')">إلغاء الغياب</button>`:''}</div></td></tr>`}).join('')||'<tr><td colspan="6" class="empty">لا يوجد طلاب ضمن هذا الاختيار</td></tr>'}</tbody></table></div>`;
+}
+
+function page_dailyabsence(){
+  if(!['admin','teacher'].includes(state.role))return noAccess();
+  const day=today();if(state.v615DailyDate!==day&&!state.v615DailyLoading)setTimeout(()=>v615LoadDailyArchive(),0);
+  const rows=state.v615DailyDate===day?(state.v615DailyRows||[]):[];
+  const loading=state.v615DailyLoading||state.v615DailyDate!==day;
+  const error=state.v615DailyError?`<div class="message error">تعذر تحميل غائبي اليوم: ${esc(state.v615DailyError)}</div>`:'';
+  return `<div class="toolbar"><div><h2 class="section-title">غائبو اليوم</h2><div class="muted">قائمة يومية مستقلة بتاريخ <b>${esc(day)}</b>. مع بداية يوم جديد تبدأ هذه الخانة فارغة تلقائياً.</div></div><div class="row"><span class="badge absent">${rows.length} غائب</span><button class="btn secondary" onclick="v615LoadDailyArchive(true)">↻ تحديث</button><button class="btn" onclick="setTab('attendance')">+ تسجيل غياب</button></div></div><div class="message ok">أي غياب تحفظه يدخل الجرد الشهري والأرشيف السنوي فوراً. وإذا ألغيت غياباً مسجلاً بالخطأ يُصحح من الاثنين تلقائياً.</div>${error}<div class="card section">${loading?'<div class="empty">جاري تحميل غائبي اليوم...</div>':`<div class="table-wrap"><table><thead><tr><th>الطالب الغائب</th><th>الصف / الشعبة</th><th>الموقع</th><th>ملاحظة</th><th>إجراء</th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${esc(r.student_name||'—')}</b></td><td>${esc(r.grade||'—')} ${r.class_name?`/ ${esc(r.class_name)}`:''}</td><td>${esc(r.location_label||'—')}</td><td>${esc(r.note||'—')}</td><td><button class="btn small danger" onclick="cancelAbsenceRow('${r.student_id}','${day}')">إلغاء الغياب</button></td></tr>`).join('')||'<tr><td colspan="5" class="empty">لا يوجد أي طالب غائب مسجل اليوم</td></tr>'}</tbody></table></div>`}</div>`;
+}
+
+function page_dailynotes(){
+  if(!['admin','teacher'].includes(state.role))return noAccess();
+  const day=today(),notes=v6151TodayNotes();
+  return `<div class="toolbar"><div><h2 class="section-title">ملاحظات اليوم</h2><div class="muted">تعرض فقط الملاحظات التي أُرسلت إلى أولياء الأمور اليوم <b>${esc(day)}</b>. مع بداية يوم جديد تبدأ القائمة اليومية فارغة تلقائياً.</div></div><div class="row"><span class="badge active">${notes.length} ملاحظة</span><button class="btn" onclick="openNoteModal()">+ ملاحظة جديدة</button><button class="btn secondary" onclick="setTab('notes')">كل الملاحظات</button></div></div><div class="message ok">هذه الخانة للمتابعة اليومية فقط؛ الملاحظات لا تُضاف إلى الجرد الشهري ولا إلى الأرشيف السنوي.</div><div class="card section"><div class="table-wrap"><table><thead><tr><th>الطالب</th><th>الملاحظة</th><th>التصنيف</th><th>الأهمية</th><th>الوقت</th><th>للأهل</th><th>الصورة</th></tr></thead><tbody>${notes.map(n=>`<tr><td><b>${esc(studentName(n.student_id))}</b></td><td><b>${esc(n.title||'ملاحظة')}</b><div class="muted" style="margin-top:4px">${esc(n.content||'')}</div></td><td>${esc(n.category||'ملاحظة عامة')}</td><td><span class="badge ${n.importance==='مهم'?'absent':'active'}">${esc(n.importance||'عادي')}</span></td><td>${esc(v6151LocalTime(n.created_at))}</td><td><span class="badge active">مرسلة ✓</span></td><td>${n.image_url?`<a href="${esc(n.image_url)}" target="_blank" rel="noopener">📷 عرض</a>`:'—'}</td></tr>`).join('')||'<tr><td colspan="7" class="empty">لا توجد ملاحظات مرسلة اليوم</td></tr>'}</tbody></table></div></div>`;
+}
+
+function navItems(){
+  if(state.role==='teacher') return [
+    ['home','⌂','الرئيسية'],['buildings','▦','الصفوف والشعب'],['students','♟','طلابي'],['attendance','×','تسجيل الغياب'],['dailyabsence','☷','غائبو اليوم'],['dailynotes','✎','ملاحظات اليوم'],['grades','▤','النتائج'],['reports','▥','الجرد الشهري'],['notes','≡','كل الملاحظات']
+  ];
+  return [
+    ['home','⌂','الرئيسية'],['buildings','▦','الصفوف والشعب'],['students','♟','الطلاب'],['attendance','×','تسجيل الغياب'],['dailyabsence','☷','غائبو اليوم'],['dailynotes','✎','ملاحظات اليوم'],['reports','▥','الجرد الشهري'],['archive','▧','الأرشيف السنوي'],['notes','≡','كل الملاحظات'],['grades','▤','النتائج'],['announcements','◉','الإعلانات'],['teachers','♙','المدرسون'],['audit','≡','سجل العمليات'],['settings','⚙','الإعدادات']
+  ];
+}
+function setTab(t){
+  state.tab=t;state.sidebar=false;
+  if(t==='dailyabsence'){state.v615DailyDate='';state.v615DailyRows=[];state.v615DailyError='';}
+  if(t==='archive'){state.v615AnnualAbsenceYear='';state.v615AnnualAbsenceRows=[];state.v615AnnualAbsenceError='';}
+  render();
+}
+function appPage(){
+  const labels={home:'الرئيسية',buildings:'الصفوف والشعب',students:'الطلاب',attendance:'تسجيل الغياب',dailyabsence:'غائبو اليوم',dailynotes:'ملاحظات اليوم',reports:'الجرد الشهري',archive:'الأرشيف السنوي',notes:'كل الملاحظات',grades:'النتائج',announcements:'الإعلانات',teachers:'إدارة المدرسين',audit:'سجل العمليات',settings:'الإعدادات'};
+  if(state.role==='teacher'&&!['home','buildings','students','attendance','dailyabsence','dailynotes','grades','reports','notes'].includes(state.tab))state.tab='home';
+  const topLogo=logo().replace('<img','<img class="top-logo"'),watermark=logo().replace('<img','<img class="content-watermark"');
+  return `<div class="app-shell"><aside class="sidebar ${state.sidebar?'open':''}"><div class="side-brand">${logo()}<div><b>${esc(state.data?.settings?.school_name||'مدرسة المنارة الخاصة')}</b><small>MANARA PRIVATE SCHOOL</small></div><button class="drawer-close" onclick="toggleSidebar(false)" aria-label="إغلاق">×</button></div><div class="user-card"><b>${esc(state.user?.name||'')}</b><small>${state.role==='admin'?'مدير النظام — تحكم كامل':'مدرس — طلاب + غياب + نتائج + ملاحظات ضمن الشعب المخصصة'}</small></div><div class="side-label">القائمة الرئيسية</div><nav class="side-nav">${navItems().map(n=>`<button class="${state.tab===n[0]?'active':''}" onclick="setTab('${n[0]}')"><i class="nav-icon">${n[1]}</i>${n[2]}</button>`).join('')}</nav><div class="side-label" style="margin-top:16px">الحساب</div><nav class="side-nav"><button onclick="goParent()"><i class="nav-icon">◫</i>معاينة بوابة الأهل</button><button onclick="logout()"><i class="nav-icon">↪</i>تسجيل الخروج</button></nav></aside><div class="drawer-backdrop ${state.sidebar?'show':''}" onclick="toggleSidebar(false)"></div><main class="main"><header class="topbar"><div class="row"><button class="btn outline mobile-menu" onclick="toggleSidebar()">☰</button><div class="page-title"><b>${labels[state.tab]||''}</b><small>${state.role==='admin'?'لوحة الإدارة الرئيسية':'طلابك وشعبك فقط'}</small></div></div>${topLogo}<div class="top-actions"><span class="badge ${state.role}">${state.role==='admin'?'الإدارة':'مدرس'}</span></div></header><section class="content">${watermark}${pageContent()}</section></main></div>`;
+}
+function page_home(){
+  const d=state.data||{},todayAbs=(d.attendance||[]).filter(x=>x.date===today()&&x.status==='غائب'),todayNotes=v6151TodayNotes();
+  if(state.role==='teacher'){
+    return `<div class="role-note">حسابك يبقى مسجلاً حتى تضغط «تسجيل الخروج». صلاحيتك محصورة بالشعب التي حددتها الإدارة.</div><div class="kpi-grid section"><div class="card kpi"><div><b>الطلاب المسموحون</b><strong>${d.students?.length||0}</strong></div><div class="kpi-icon">♟</div></div><div class="card kpi"><div><b>غائب اليوم</b><strong>${todayAbs.length}</strong></div><div class="kpi-icon">×</div></div><div class="card kpi"><div><b>ملاحظات اليوم</b><strong>${todayNotes.length}</strong></div><div class="kpi-icon">✎</div></div><div class="card kpi"><div><b>النتائج المسجلة</b><strong>${(d.grades||[]).length}</strong></div><div class="kpi-icon">▤</div></div></div><div class="two-col section"><div class="card"><div class="row between"><div><h3 class="section-title">غائبو اليوم</h3><div class="muted">قائمة يومية، ويمكن تصحيح أي غياب مسجل بالخطأ.</div></div><button class="btn" onclick="setTab('dailyabsence')">عرض غائبي اليوم</button></div></div><div class="card"><div class="row between"><div><h3 class="section-title">ملاحظات اليوم</h3><div class="muted">الملاحظات التي وصلت للأهل اليوم فقط.</div></div><button class="btn secondary" onclick="setTab('dailynotes')">عرض ملاحظات اليوم</button></div></div></div><div class="card section"><div class="row between"><div><h3 class="section-title">الجرد الشهري</h3><div class="muted">يتضمن الغياب فقط، ولا تدخل ملاحظات اليوم ضمن الجرد.</div></div><button class="btn secondary" onclick="setTab('reports')">فتح الجرد</button></div></div>`;
+  }
+  const s=d.dashboardStats||{},unread=(d.notifications||[]).filter(n=>!n.seen_at).length;
+  return `<div class="kpi-grid"><div class="card kpi"><div><b>إجمالي الطلاب</b><strong>${moneyLike(s.total_students??d.students?.length)}</strong></div><div class="kpi-icon">♟</div></div><div class="card kpi"><div><b>غائب اليوم</b><strong>${moneyLike(todayAbs.length)}</strong></div><div class="kpi-icon">×</div></div><div class="card kpi"><div><b>ملاحظات اليوم</b><strong>${moneyLike(todayNotes.length)}</strong></div><div class="kpi-icon">✎</div></div><div class="card kpi"><div><b>إشعارات أهل غير مقروءة</b><strong>${moneyLike(unread)}</strong></div><div class="kpi-icon">🔔</div></div></div><div class="two-col section"><div class="card"><h3 class="section-title">المتابعة اليومية</h3><div class="stack"><div class="row between"><span>عدد الطلاب الغائبين</span><b>${moneyLike(todayAbs.length)}</b></div><div class="row between"><span>ملاحظات أُرسلت للأهل اليوم</span><b>${moneyLike(todayNotes.length)}</b></div><button class="btn" onclick="setTab('dailyabsence')">غائبو اليوم</button><button class="btn secondary" onclick="setTab('dailynotes')">ملاحظات اليوم</button></div></div><div class="card"><h3 class="section-title">اختصارات</h3><div class="stack"><button class="btn" onclick="setTab('attendance')">تسجيل الغياب</button><button class="btn secondary" onclick="setTab('reports')">الجرد الشهري والمجاميع</button><button class="btn secondary" onclick="setTab('archive')">الأرشيف السنوي</button></div></div></div>`;
+}
