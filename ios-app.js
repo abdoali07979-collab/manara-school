@@ -7,8 +7,8 @@ const LOGIN_REMEMBER_KEY = 'almanara_login_remember';
 const PARENT_CODE_KEY = 'manara_parent_saved_code';
 const FCM_TOKEN_KEY = 'manara_fcm_token';
 const PUBLIC_PARENT_PORTAL_URL = 'https://abdoali07979-collab.github.io/manara-school/';
-const APP_VERSION_CODE = 17;
-const APP_VERSION_LABEL = '6.13';
+const APP_VERSION_CODE = 18;
+const APP_VERSION_LABEL = '6.14';
 const UPDATE_CACHE_KEY = 'manara_android_update_config_v1';
 let sb = null;
 let state = { screen:'parent', user:null, role:null, tab:'home', portal:null, data:null, sidebar:false, loginNotice:'', portalPoll:null, pendingAuthUser:null, pendingAuthProfile:null, mfaEnroll:null };
@@ -803,7 +803,7 @@ function teacherRoomCheckboxes(selected=[]){
 function selectedTeacherRooms(){return [...document.querySelectorAll('input[name="teacher_room"]:checked')].map(x=>x.value);}
 function teacherTableHtml(q=''){
   q=String(q||'').trim().toLowerCase();const list=(state.data.teachers||[]).filter(t=>!q||[t.full_name,t.email,t.username,t.id,assignedRoomsLabel(t.id)].some(v=>String(v||'').toLowerCase().includes(q)));
-  return `<div class="table-wrap"><table><thead><tr><th>اسم الأستاذ</th><th>${DEMO?'اسم المستخدم':'الحساب'}</th><th>الشعب المخصصة</th><th>الصلاحية</th><th>الحالة</th><th>إجراء</th></tr></thead><tbody>${list.map(t=>`<tr><td><b>${esc(t.full_name)}</b></td><td>${esc(t.username||t.email||t.id)}</td><td><div class="assignment-list">${assignedRoomIds(t.id).map(id=>`<span class="badge active">${esc(roomLocation(id))}</span>`).join(' ')||'<span class="badge warning">لم تحدد شعب</span>'}</div></td><td><span class="badge teacher">طلاب + حضور + ملاحظات</span></td><td><span class="badge ${t.active===false?'inactive':'active'}">${t.active===false?'موقوف':'فعال'}</span></td><td><div class="row"><button class="btn small secondary" onclick="openTeacherEditModal('${t.id}')">تعديل</button><button class="btn small secondary" onclick="openTeacherPasswordModal('${t.id}')">كلمة السر</button><button class="btn small ${t.active===false?'secondary':'danger'}" onclick="toggleTeacher('${t.id}',${t.active===false?'true':'false'})">${t.active===false?'تفعيل':'إيقاف'}</button><button class="btn small danger" onclick="deleteTeacher('${t.id}')">حذف</button></div></td></tr>`).join('')||'<tr><td colspan="6" class="empty">لا يوجد مدرسون مطابقون للبحث</td></tr>'}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>اسم الأستاذ</th><th>${DEMO?'اسم المستخدم':'الحساب'}</th><th>الشعب المخصصة</th><th>الصلاحية</th><th>الحالة</th><th>إجراء</th></tr></thead><tbody>${list.map(t=>`<tr><td><b>${esc(t.full_name)}</b></td><td>${esc(t.username||t.email||t.id)}</td><td><div class="assignment-list">${assignedRoomIds(t.id).map(id=>`<span class="badge active">${esc(roomLocation(id))}</span>`).join(' ')||'<span class="badge warning">لم تحدد شعب</span>'}</div></td><td><span class="badge teacher">طلاب + غياب + ملاحظات</span></td><td><span class="badge ${t.active===false?'inactive':'active'}">${t.active===false?'موقوف':'فعال'}</span></td><td><div class="row"><button class="btn small secondary" onclick="openTeacherEditModal('${t.id}')">تعديل</button><button class="btn small secondary" onclick="openTeacherPasswordModal('${t.id}')">كلمة السر</button><button class="btn small ${t.active===false?'secondary':'danger'}" onclick="toggleTeacher('${t.id}',${t.active===false?'true':'false'})">${t.active===false?'تفعيل':'إيقاف'}</button><button class="btn small danger" onclick="deleteTeacher('${t.id}')">حذف</button></div></td></tr>`).join('')||'<tr><td colspan="6" class="empty">لا يوجد مدرسون مطابقون للبحث</td></tr>'}</tbody></table></div>`;
 }
 function filterTeacherTable(){const el=document.getElementById('teacherTable');if(el)el.innerHTML=teacherTableHtml(document.getElementById('teacherSearch')?.value||'');applyMobileUi();}
 function page_teachers(){
@@ -1554,7 +1554,7 @@ function openNoteModal(studentId=''){
 }
 
 /* =========================================================
-   MANARA V6.13 — teacher move/delete + professional class sorting
+   MANARA V6.13 baseline — teacher move/delete + professional class sorting
    ONLY these requested changes are added here.
    ========================================================= */
 function v613ArabicOrdinalNumber(value=''){
@@ -1637,3 +1637,171 @@ function v610FolderAction(action,id){
   },40);
 }
 
+
+
+/* =========================================================
+   MANARA V6.14 — Absence-only workflow + safer student data
+   + student photos in main list + safe class deletion
+   + scoped Parent/Staff updates for future releases.
+   Existing historical attendance records are preserved.
+   ========================================================= */
+
+function v614StudentAvatarCell(st){
+  const initial=esc((v612StudentDisplayName(st)||'ط').trim().charAt(0)||'ط');
+  return `<div style="display:flex;align-items:center;gap:9px;min-width:180px"><div style="width:46px;height:46px;flex:0 0 46px;border-radius:50%;overflow:hidden;background:#e8f1ec;display:grid;place-items:center;font-weight:800;color:#0b6b3a"><span id="v614_list_initial_${st.id}">${initial}</span><img id="v614_list_photo_${st.id}" alt="صورة الطالب" style="display:none;width:100%;height:100%;object-fit:cover"></div><div><b>${esc(v612StudentDisplayName(st))}</b><div style="margin-top:4px">${v612WhatsAppPhoneHtml(st.parent_phone||'')}</div></div></div>`;
+}
+async function v614LoadStudentListPhotos(){
+  if(DEMO||!state.data?.students?.length)return;
+  const ids=(state.data.students||[]).filter(s=>s.photo_path).map(s=>String(s.id)).slice(0,120);
+  if(!ids.length)return;
+  try{
+    const data=await invokeSecureFunction('manage-student',{action:'photo_urls',student_ids:ids});
+    const urls=data?.urls||{};
+    Object.entries(urls).forEach(([id,url])=>{
+      const img=document.getElementById(`v614_list_photo_${id}`),initial=document.getElementById(`v614_list_initial_${id}`);
+      if(img&&url){img.src=String(url);img.style.display='block';if(initial)initial.style.display='none';}
+    });
+  }catch(_){}
+}
+function studentTableHtml(q=''){
+  q=String(q||'').trim().toLowerCase();
+  const rows=v612SortedStudents(state.data.students||[]).filter(st=>!q||[v612StudentDisplayName(st),st.father_name,st.grandfather_name,st.family_name,st.parent_phone,st.access_code,st.grade,st.class_name,st.building_name,st.floor_name,st.room_name,roomLocation(st.room_id)].some(v=>String(v||'').toLowerCase().includes(q)));
+  return `<div class="table-wrap"><table><thead><tr><th>الطالب</th><th>الأب</th><th>الجد</th><th>الصف</th><th>الموقع</th><th>الكود</th><th>الحالة</th><th>إجراء</th></tr></thead><tbody>${rows.map(st=>`<tr><td>${v614StudentAvatarCell(st)}</td><td>${esc(st.father_name||'—')}</td><td><b>${esc(st.grandfather_name||'—')}</b></td><td>${esc(st.grade||'—')} ${st.class_name?`/ ${esc(st.class_name)}`:''}</td><td>${esc(st.location_label||roomLocation(st.room_id))}</td><td><span class="code">${esc(st.access_code||'')}</span></td><td><span class="badge ${st.active===false?'inactive':'active'}">${st.active===false?'موقوف':'فعال'}</span></td><td>${state.role==='admin'?`<div class="row"><button class="btn small secondary" onclick="openStudentModal('${st.id}')">تعديل</button><button class="btn small warning" onclick="openMoveStudentModal('${st.id}')">نقل</button><button class="btn small warning" onclick="regenerateCode('${st.id}')">كود جديد</button><button class="btn small secondary" onclick="showStudentQr('${st.id}')">QR</button><button class="btn small" onclick="openNoteModal('${st.id}')">ملاحظة</button><button class="btn small danger" onclick="deleteStudent('${st.id}')">حذف</button></div>`:`<div class="row"><button class="btn small secondary" onclick="openStudentModal('${st.id}')">تعديل</button><button class="btn small warning" onclick="openMoveStudentModal('${st.id}')">نقل</button><button class="btn small secondary" onclick="showStudentQr('${st.id}')">QR</button><button class="btn small" onclick="openNoteModal('${st.id}')">ملاحظة للأهل</button><button class="btn small danger" onclick="deleteStudent('${st.id}')">حذف</button></div>`}</td></tr>`).join('')||'<tr><td colspan="8" class="empty">لا توجد نتائج</td></tr>'}</tbody></table></div>`;
+}
+function page_students(){
+  if(!['admin','teacher'].includes(state.role))return noAccess();const teacher=state.role==='teacher';
+  setTimeout(v614LoadStudentListPhotos,35);
+  return `<div class="toolbar"><div><h2 class="section-title">${teacher?'طلاب الشعب المخصصة لي':'سجل الطلاب'}</h2><div class="muted">${teacher?'طلابك فقط مع إمكانية التقرير والطباعة.':'إدارة الطلاب مع ظهور الصورة الشخصية مباشرة في القائمة.'}</div></div><button class="btn" onclick="openStudentModal()">+ تسجيل طالب جديد</button></div>${teacher?`<div class="role-note">الشعب المخصصة لك: <b>${assignedRoomsLabel(state.user.id)}</b></div>`:''}<div class="card"><div class="toolbar"><div class="field search"><label>بحث سريع</label><input id="studentSearch" placeholder="الاسم، الكود، الصف..." oninput="filterStudentTable()"></div><div class="hint">عدد الطلاب: <b>${state.data.students.length}</b></div></div><div id="studentTable">${studentTableHtml()}</div></div>`;
+}
+function filterStudentTable(){
+  const box=document.getElementById('studentTable');if(!box)return;
+  box.innerHTML=studentTableHtml(document.getElementById('studentSearch')?.value||'');applyMobileUi();setTimeout(v614LoadStudentListPhotos,20);
+}
+function duplicateStudentLocal(row,id=''){
+  return (state.data.students||[]).find(x=>String(x.id)!==String(id)&&String(x.room_id||'')===String(row.room_id||'')&&normalizeIdentityValue(v612StudentDisplayName(x))===normalizeIdentityValue(row.full_name)&&normalizeIdentityValue(x.father_name)===normalizeIdentityValue(row.father_name)&&normalizeIdentityValue(x.mother_name)===normalizeIdentityValue(row.mother_name)&&normalizeIdentityValue(x.grandfather_name)===normalizeIdentityValue(row.grandfather_name)&&String(x.date_of_birth||'')===String(row.date_of_birth||''));
+}
+
+function navItems(){
+  if(state.role==='teacher') return [
+    ['home','⌂','الرئيسية'],['buildings','▦','الصفوف والشعب'],['students','♟','طلابي'],['attendance','×','الغياب'],['grades','▤','النتائج'],['reports','▥','الجرد الشهري'],['notes','✎','ملاحظات الطلاب']
+  ];
+  return [
+    ['home','⌂','الرئيسية'],['buildings','▦','الصفوف والشعب'],['students','♟','الطلاب'],['attendance','×','الغياب'],['reports','▥','الجرد الشهري'],['archive','▧','الأرشيف السنوي'],['notes','✎','ملاحظات الطلاب'],['grades','▤','النتائج'],['announcements','◉','الإعلانات'],['teachers','♙','المدرسون'],['audit','≡','سجل العمليات'],['settings','⚙','الإعدادات']
+  ];
+}
+function appPage(){
+  const labels={home:'الرئيسية',buildings:'الصفوف والشعب',students:'الطلاب',attendance:'الغياب',reports:'الجرد الشهري',archive:'الأرشيف السنوي',notes:'ملاحظات الطلاب',grades:'النتائج',announcements:'الإعلانات',teachers:'إدارة المدرسين',audit:'سجل العمليات',settings:'الإعدادات'};
+  if(state.role==='teacher'&&!['home','buildings','students','attendance','grades','reports','notes'].includes(state.tab))state.tab='home';
+  const topLogo=logo().replace('<img','<img class="top-logo"'),watermark=logo().replace('<img','<img class="content-watermark"');
+  return `<div class="app-shell"><aside class="sidebar ${state.sidebar?'open':''}"><div class="side-brand">${logo()}<div><b>${esc(state.data?.settings?.school_name||'مدرسة المنارة الخاصة')}</b><small>MANARA PRIVATE SCHOOL</small></div><button class="drawer-close" onclick="toggleSidebar(false)" aria-label="إغلاق">×</button></div><div class="user-card"><b>${esc(state.user?.name||'')}</b><small>${state.role==='admin'?'مدير النظام — تحكم كامل':'مدرس — طلاب + غياب + نتائج + ملاحظات ضمن الشعب المخصصة'}</small></div><div class="side-label">القائمة الرئيسية</div><nav class="side-nav">${navItems().map(n=>`<button class="${state.tab===n[0]?'active':''}" onclick="setTab('${n[0]}')"><i class="nav-icon">${n[1]}</i>${n[2]}</button>`).join('')}</nav><div class="side-label" style="margin-top:16px">الحساب</div><nav class="side-nav"><button onclick="goParent()"><i class="nav-icon">◫</i>معاينة بوابة الأهل</button><button onclick="logout()"><i class="nav-icon">↪</i>تسجيل الخروج</button></nav></aside><div class="drawer-backdrop ${state.sidebar?'show':''}" onclick="toggleSidebar(false)"></div><main class="main"><header class="topbar"><div class="row"><button class="btn outline mobile-menu" onclick="toggleSidebar()">☰</button><div class="page-title"><b>${labels[state.tab]||''}</b><small>${state.role==='admin'?'لوحة الإدارة الرئيسية':'طلابك وشعبك فقط'}</small></div></div>${topLogo}<div class="top-actions"><span class="badge ${state.role}">${state.role==='admin'?'الإدارة':'مدرس'}</span></div></header><section class="content">${watermark}${pageContent()}</section></main></div>`;
+}
+function page_home(){
+  const d=state.data||{},todayAbs=(d.attendance||[]).filter(x=>x.date===today()&&x.status==='غائب');
+  if(state.role==='teacher'){
+    return `<div class="role-note">حسابك يبقى مسجلاً حتى تضغط «تسجيل الخروج». صلاحيتك محصورة بالشعب التي حددتها الإدارة.</div><div class="kpi-grid section"><div class="card kpi"><div><b>الطلاب المسموحون</b><strong>${d.students?.length||0}</strong></div><div class="kpi-icon">♟</div></div><div class="card kpi"><div><b>غائب اليوم</b><strong>${todayAbs.length}</strong></div><div class="kpi-icon">×</div></div><div class="card kpi"><div><b>الشعب المخصصة</b><strong>${assignedRoomIds().length}</strong></div><div class="kpi-icon">▦</div></div><div class="card kpi"><div><b>النتائج المسجلة</b><strong>${(d.grades||[]).length}</strong></div><div class="kpi-icon">▤</div></div></div><div class="two-col section"><div class="card"><div class="row between"><div><h3 class="section-title">الجرد الشهري</h3><div class="muted">الجرد خاص بطلاب الشعب المخصصة لك فقط.</div></div><button class="btn" onclick="setTab('reports')">فتح الجرد</button></div></div><div class="card"><div class="row between"><div><h3 class="section-title">الغياب اليومي</h3><div class="muted">سجّل الطلاب الغائبين فقط.</div></div><button class="btn secondary" onclick="setTab('attendance')">فتح الغياب</button></div></div></div>`;
+  }
+  const s=d.dashboardStats||{},unread=(d.notifications||[]).filter(n=>!n.seen_at).length;
+  return `<div class="kpi-grid"><div class="card kpi"><div><b>إجمالي الطلاب</b><strong>${moneyLike(s.total_students??d.students?.length)}</strong></div><div class="kpi-icon">♟</div></div><div class="card kpi"><div><b>غائب اليوم</b><strong>${moneyLike(todayAbs.length)}</strong></div><div class="kpi-icon">×</div></div><div class="card kpi"><div><b>إجمالي الشعب</b><strong>${moneyLike((d.rooms||[]).length)}</strong></div><div class="kpi-icon">▦</div></div><div class="card kpi"><div><b>إشعارات أهل غير مقروءة</b><strong>${moneyLike(unread)}</strong></div><div class="kpi-icon">🔔</div></div></div><div class="two-col section"><div class="card"><h3 class="section-title">الغياب اليوم</h3><div class="stack"><div class="row between"><span>عدد الطلاب الغائبين</span><b>${moneyLike(todayAbs.length)}</b></div><div class="row between"><span>أكثر شعبة غياباً</span><b>${esc(s.most_absent_room||'—')} ${Number(s.most_absent_room_count||0)?`(${s.most_absent_room_count})`:''}</b></div><div class="row between"><span>غياب هذا الشهر</span><b>${moneyLike(s.current_month_absent||0)}</b></div></div></div><div class="card"><h3 class="section-title">اختصارات</h3><div class="stack"><button class="btn" onclick="setTab('attendance')">سجل الغياب</button><button class="btn secondary" onclick="setTab('reports')">الجرد الشهري والمجاميع</button><button class="btn secondary" onclick="setTab('archive')">الأرشيف السنوي</button></div></div></div>`;
+}
+function v614AbsenceRowsForDate(date){return (state.data.attendance||[]).filter(x=>x.date===date&&x.status==='غائب');}
+function page_attendance(){
+  const date=state.attDate||today(),roster=allowedAttendanceStudents(),records=v614AbsenceRowsForDate(date),bopts=(state.data.buildings||[]).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  const saved=state.absenceSavedMessage?`<div class="message ok"><b>${esc(state.absenceSavedMessage)}</b></div>`:'';
+  const absentTable=`<div class="table-wrap"><table><thead><tr><th>الطالب الغائب</th><th>الصف</th><th>الموقع</th><th>ملاحظة</th></tr></thead><tbody>${records.map(r=>{const st=(state.data.students||[]).find(s=>String(s.id)===String(r.student_id));return st?`<tr><td><b>${esc(v612StudentDisplayName(st))}</b></td><td>${esc(st.grade||'—')} ${st.class_name?`/ ${esc(st.class_name)}`:''}</td><td>${esc(st.location_label||roomLocation(st.room_id))}</td><td>${esc(r.note||'—')}</td></tr>`:''}).join('')||'<tr><td colspan="4" class="empty">لا يوجد غياب مسجل في هذا التاريخ</td></tr>'}</tbody></table></div>`;
+  return `${saved}<div class="toolbar"><div><h2 class="section-title">سجل الغياب</h2><div class="muted">سجّل الطالب الغائب فقط. الطلاب غير الغائبين لا يحتاجون لأي تسجيل.</div></div><div class="row"><div class="field" style="margin:0"><label>التاريخ</label><input id="attDate" type="date" value="${date}" onchange="changeAttDate(this.value)"></div></div></div><div class="card"><div class="toolbar"><div class="row filters"><div class="field search"><label>بحث</label><input id="attSearch" placeholder="اسم الطالب أو الصف" oninput="filterAttendanceRoster()"></div><div class="field"><label>القسم</label><select id="attBuilding" onchange="filterAttendanceRoster()"><option value="">كل الأقسام</option>${bopts}</select></div><div class="field"><label>الشعبة</label><select id="attRoom" onchange="filterAttendanceRoster()"><option value="">كل الشعب</option>${(state.data.rooms||[]).filter(r=>state.role!=='teacher'||assignedRoomIds().map(String).includes(String(r.id))).sort(v613RoomCompare).map(r=>`<option value="${r.id}">${esc(roomLocation(r.id))}</option>`).join('')}</select></div></div><div class="hint">اكتب الملاحظة إن وجدت ثم اضغط «حفظ الغياب» للطالب الغائب فقط.</div></div><div id="attRoster">${attendanceTableHtml(roster,records,'','','')}</div></div><div class="card section"><div class="row between"><h3 class="section-title">الغياب المسجل لهذا اليوم</h3><span class="badge absent">${records.length} غائب</span></div>${absentTable}</div>`;
+}
+function attendanceTableHtml(roster,records,q='',buildingId='',roomId=''){
+  q=String(q||'').trim().toLowerCase();
+  const rows=v612SortedStudents(roster||[]).filter(s=>{const r=state.data.rooms?.find(x=>String(x.id)===String(s.room_id)),f=state.data.floors?.find(x=>String(x.id)===String(r?.floor_id));return(!q||[v612StudentDisplayName(s),s.grade,s.class_name,roomLocation(s.room_id)].some(v=>String(v||'').toLowerCase().includes(q)))&&(!buildingId||String(f?.building_id)===String(buildingId))&&(!roomId||String(s.room_id)===String(roomId))});
+  return `<div class="table-wrap"><table><thead><tr><th>الطالب</th><th>الصف</th><th>الموقع</th><th>الحالة</th><th>ملاحظة</th><th>حفظ</th></tr></thead><tbody>${rows.map(s=>{const r=(records||[]).find(x=>String(x.student_id)===String(s.id));return `<tr><td><b>${esc(v612StudentDisplayName(s))}</b></td><td>${esc(s.grade||'—')}</td><td>${esc(s.location_label||roomLocation(s.room_id))}</td><td>${r?'<span class="badge absent">غائب ✓</span>':'<span class="muted">غير مسجل</span>'}</td><td><input id="note_${s.id}" value="${esc(r?.note||'')}" placeholder="اختياري"></td><td><button class="btn small ${r?'secondary':''}" onclick="saveAttendanceRow('${s.id}')">${r?'تحديث الغياب':'حفظ الغياب'}</button></td></tr>`}).join('')||'<tr><td colspan="6" class="empty">لا يوجد طلاب ضمن هذا الاختيار</td></tr>'}</tbody></table></div>`;
+}
+function changeAttDate(v){state.attDate=v;state.absenceSavedMessage='';render();}
+function filterAttendanceRoster(){const date=state.attDate||today(),records=v614AbsenceRowsForDate(date),box=document.getElementById('attRoster');if(box)box.innerHTML=attendanceTableHtml(allowedAttendanceStudents(),records,document.getElementById('attSearch')?.value.trim()||'',document.getElementById('attBuilding')?.value||'',document.getElementById('attRoom')?.value||'');applyMobileUi();}
+async function saveAttendanceRow(studentId){
+  const date=state.attDate||today(),note=document.getElementById('note_'+studentId)?.value.trim()||'';
+  try{
+    if(DEMO){let r=state.data.attendance.find(x=>String(x.student_id)===String(studentId)&&x.date===date);if(r)Object.assign(r,{status:'غائب',late_minutes:0,note,recorded_by:state.user.id});else state.data.attendance.unshift({id:uid(),student_id:studentId,date,status:'غائب',late_minutes:0,note,recorded_by:state.user.id,created_at:new Date().toISOString()});audit('تسجيل غياب','سجل طالب',`${studentName(studentId)} / ${date}`);saveDemo();}
+    else{const {error}=await sb.from('attendance').upsert({student_id:studentId,date,status:'غائب',late_minutes:0,note,recorded_by:state.user.id},{onConflict:'student_id,date'});if(error)throw error;await loadSupabaseData();}
+    state.absenceSavedMessage='تم حفظ الغياب بنجاح';render();
+  }catch(e){alert('تعذر حفظ الغياب: '+authErrorArabic(e.message));}
+}
+
+function page_buildings(){
+  if(!['admin','teacher'].includes(state.role))return noAccess();
+  const rooms=v610VisibleRooms(),groups=[];
+  for(const r of rooms){const g=String(r.grade||'غير محدد');let group=groups.find(x=>x.grade===g);if(!group){group={grade:g,rooms:[]};groups.push(group);}group.rooms.push(r);}
+  const content=groups.map(g=>`<div class="section"><div class="row between" style="margin-bottom:10px"><h3 class="section-title" style="margin:0">${esc(g.grade)}</h3><span class="badge active">${g.rooms.reduce((n,r)=>n+v610StudentsInRoom(r.id).length,0)} طالب</span></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(235px,1fr));gap:14px">${g.rooms.map(r=>{const students=v610StudentsInRoom(r.id),building=v610RoomBuildingName(r),teachers=v68TeacherNamesForRoom(r.id);return `<div class="card" style="position:relative;border:1px solid #dfe8e2;overflow:hidden"><button onclick="openClassFolder('${r.id}')" style="width:100%;border:0;background:transparent;text-align:right;padding:0;cursor:pointer;color:inherit"><div style="display:flex;align-items:center;gap:12px"><div style="font-size:42px;line-height:1">📁</div><div style="min-width:0"><b style="font-size:17px;display:block">${esc(r.grade||'—')} — ${esc(r.section_label||r.name||'شعبة')}</b><div class="muted" style="margin-top:4px">${esc(building||'')} ${building?'• ':''}${students.length} طالب</div></div></div><div class="hint" style="margin-top:12px">اضغط لفتح المجلد ومشاهدة الطلاب ومعلوماتهم</div></button>${teachers.length?`<div style="margin-top:10px">${teachers.map(n=>`<span class="badge teacher" style="margin:2px">${esc(n)}</span>`).join('')}</div>`:''}${state.role==='admin'?`<div class="row" style="margin-top:12px"><button class="btn small secondary" onclick="openRoomModal('${r.id}')">تعديل</button><button class="btn small danger" onclick="deleteRoom('${r.id}')">حذف الصف / الشعبة</button></div>`:''}</div>`}).join('')}</div></div>`).join('');
+  return `<div class="toolbar"><div><h2 class="section-title">الصفوف والشعب</h2><div class="muted">يمكن للإدارة إضافة الصفوف والشعب وتعديلها وحذف الشعبة الفارغة بأمان.</div></div>${state.role==='admin'?'<button class="btn" onclick="openRoomModal()">+ إضافة صف / شعبة</button>':''}</div>${state.role==='teacher'?`<div class="role-note">تظهر لك فقط الشعب المخصصة لحسابك: <b>${assignedRoomsLabel(state.user.id)}</b></div>`:''}${content||'<div class="card empty">لا توجد صفوف أو شعب متاحة.</div>'}`;
+}
+
+function page_reports(){
+  if(!['admin','teacher'].includes(state.role))return noAccess();const month=state.reportMonth||today().slice(0,7),rows=state.monthlyReport||[];
+  const table=rows.length?`<div id="monthlyReportPrint" class="card section"><div style="text-align:center;margin-bottom:12px"><h2 style="margin:0">${esc(state.data.settings?.school_name||'مدرسة منارة العلم الخاصة')}</h2><div>الجرد الشهري — ${esc(month)} — السنة ${esc(v68AcademicYearForDate(month+'-01'))}</div></div><div class="table-wrap"><table><thead><tr><th>الطالب</th><th>الصف/الشعبة</th><th>الغياب</th><th>مجموع الشهر</th><th>الفصل الأول</th><th>الفصل الثاني</th><th>السنوي</th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${esc(r.student_name)}</b></td><td>${esc(r.grade||'')} / ${esc(r.class_name||'')}</td><td><b>${r.absent_count||0}</b></td><td>${v68Percent(r.monthly_score,r.monthly_max)}</td><td>${v68Percent(r.term1_score,r.term1_max)}</td><td>${v68Percent(r.term2_score,r.term2_max)}</td><td><b>${v68Percent(r.year_score,r.year_max)}</b></td></tr>`).join('')}</tbody></table></div><div class="hint" style="margin-top:10px">يظهر الجرد الغياب فقط. لم يتم حذف أي سجل تاريخي قديم من قاعدة البيانات.</div></div>`:'<div class="card empty">اختر الشهر والشعبة ثم اضغط «عرض الجرد».</div>';
+  return `<div class="toolbar"><div><h2 class="section-title">الجرد الشهري والمجاميع</h2><div class="muted">${state.role==='teacher'?'يعرض فقط طلاب الشعب المخصصة لك.':'جرد شهري للغياب مع المجموع الفصلي والسنوي، قابل للطباعة والحفظ PDF.'}</div></div>${rows.length?`<button class="btn" onclick="printElement('monthlyReportPrint')">🖨 طباعة / PDF</button>`:''}</div><div class="card"><div class="row filters"><div class="field"><label>الشهر</label><input id="reportMonth" type="month" value="${esc(month)}"></div><div class="field"><label>الشعبة</label><select id="reportRoom">${reportRoomOptions()}</select></div><div class="field" style="align-self:end"><button class="btn" onclick="loadMonthlyReport()">عرض الجرد</button></div></div></div>${table}`;
+}
+async function openStudentReport(id){
+  const year=state.data.settings?.academic_year||v68AcademicYearForDate(today());
+  try{let p;if(DEMO){const s=state.data.students.find(x=>String(x.id)===String(id));p={academic_year:year,student:s,attendance:(state.data.attendance||[]).filter(x=>String(x.student_id)===String(id)),grades:(state.data.grades||[]).filter(x=>String(x.student_id)===String(id))};}else{const {data,error}=await sb.rpc('report_student_pdf',{p_student_id:String(id),p_academic_year:year});if(error)throw error;p=data;}
+    const s=p?.student||{},at=(p?.attendance||[]).filter(x=>x.status==='غائب'),gr=p?.grades||[],absent=at.length,score=gr.reduce((a,g)=>a+Number(g.score||0),0),max=gr.reduce((a,g)=>a+Number(g.max_score||0),0);
+    document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="modal"><div class="modalbox" style="max-width:950px"><div class="row between print-hide"><h2 class="section-title">تقرير الطالب</h2><div class="row"><button class="btn" onclick="printElement('studentReportPrint')">🖨 طباعة / PDF</button><button class="btn outline" onclick="closeModal()">إغلاق</button></div></div><div id="studentReportPrint"><div style="text-align:center;margin-bottom:16px">${logo().replace('<img','<img style="width:80px;height:80px;object-fit:contain"')}<h2 style="margin:6px 0">${esc(state.data.settings?.school_name||'مدرسة منارة العلم الخاصة')}</h2><div>تقرير الطالب — السنة الدراسية ${esc(p.academic_year||year)}</div></div><div class="card"><div class="mini-grid"><div><b>اسم الطالب:</b> ${esc(s.full_name||'—')}</div><div><b>اسم الأب:</b> ${esc(s.father_name||'—')}</div><div><b>اسم الجد:</b> ${esc(s.grandfather_name||'—')}</div><div><b>الصف:</b> ${esc(s.grade||'—')}</div><div><b>الشعبة:</b> ${esc(s.class_name||'—')}</div><div><b>الموقع:</b> ${esc(s.location_label||'—')}</div><div><b>ولي الأمر:</b> ${esc(s.parent_phone||'—')}</div><div><b>الكود:</b> ${esc(s.access_code||'—')}</div></div></div><div class="kpi-grid section"><div class="card kpi"><div><b>الغياب</b><strong>${absent}</strong></div></div><div class="card kpi"><div><b>المعدل</b><strong>${v68Percent(score,max)}</strong></div></div></div><div class="section"><h3>النتائج</h3><div class="table-wrap"><table><thead><tr><th>المادة</th><th>الاختبار</th><th>التاريخ</th><th>العلامة</th></tr></thead><tbody>${gr.map(g=>`<tr><td>${esc(g.subject_name||'')}</td><td>${esc(g.exam_name||'')}</td><td>${esc(g.date||'—')}</td><td>${esc(g.score)}/${esc(g.max_score||100)}</td></tr>`).join('')||'<tr><td colspan="4">لا توجد نتائج</td></tr>'}</tbody></table></div></div><div class="section"><h3>سجل الغياب</h3><div class="table-wrap"><table><thead><tr><th>التاريخ</th><th>ملاحظة</th></tr></thead><tbody>${at.map(a=>`<tr><td>${esc(a.date)}</td><td>${esc(a.note||'—')}</td></tr>`).join('')||'<tr><td colspan="2">لا يوجد غياب مسجل</td></tr>'}</tbody></table></div></div></div></div></div>`);
+  }catch(e){alert('تعذر إنشاء التقرير: '+authErrorArabic(e.message));}
+}
+
+function parentPage(){
+  const accountBtn=state.user&&state.role?`<button class="btn outline" onclick="returnToDashboard()">↩ العودة للوحة ${state.role==='admin'?'الإدارة':'المدرس'}</button>`:`<button class="btn outline" onclick="goLogin()">دخول الإدارة / المدرسين</button>`;
+  return `<div class="public-page"><div class="public-shell"><div class="public-header">${brandLockup()}${accountBtn}</div><div class="portal-grid"><section class="portal-hero">${logo()}<h1>بوابة ولي الأمر</h1><p>تابع غياب الطالب ونتائجه وملاحظاته وإعلانات المدرسة باستخدام الكود الخاص بالطالب.</p><div class="hint" style="color:#bcd4c5">يتم تسجيل الغياب فقط؛ عدم وجود غياب يعني أنه لم يُسجل على الطالب غياب في ذلك اليوم.</div></section><section class="auth-card"><h2>عرض ملف الطالب</h2><p class="muted">اكتب كود الطالب أو امسح QR أو اختر صورة QR من ألبوم الصور.</p><div class="field"><label>كود الطالب</label><input id="portalCode" autocomplete="off" placeholder="MN-ABCD-2345" onkeydown="if(event.key==='Enter') findStudentPortal()"></div><div class="row" style="gap:10px;flex-wrap:wrap"><button class="btn" onclick="findStudentPortal()">عرض الملف</button><button class="btn secondary" onclick="scanParentQr()">📷 مسح QR</button><button class="btn secondary" onclick="chooseParentQrImage()">🖼️ اختيار صورة QR</button></div><div class="hint" style="margin-top:10px">QR يستخدم نفس كود الطالب الحالي؛ لا يوجد كود ثانٍ أو تسجيل جديد.</div><div id="portalMessage"></div></section></div><div id="portalResult" class="section">${state.portal?portalHtml(state.portal):''}</div></div></div>`;
+}
+function portalHtml(p){
+  const s=p.student||{},at=(p.attendance||[]).filter(x=>x.status==='غائب'),gr=p.grades||[],notes=p.notes||[],notifications=p.notifications||[],absent=at.length;
+  const avg=gr.length?(gr.reduce((a,g)=>a+(Number(g.score)/(Number(g.max_score||g.max||100))*100),0)/gr.length).toFixed(1):'—',unread=notifications.filter(n=>!n.seen_at).length;
+  const pst=p.settings||{},phone1=String(pst.phone||'').trim(),phone2=String(pst.phone2||'').trim();
+  const phoneCard=(phone1||phone2)?`<div class="section"><div class="card"><h3 style="margin-top:0">التواصل مع مدير مدرسة منارة العلم الخاصة</h3><div class="row" style="gap:10px;flex-wrap:wrap">${phone1?`<a class="btn secondary" href="tel:${esc(phone1)}">📞 ${esc(phone1)}</a>`:''}${phone2?`<a class="btn secondary" href="tel:${esc(phone2)}">📞 ${esc(phone2)}</a>`:''}</div></div></div>`:'';
+  setTimeout(()=>notifyParentDevice(notifications.filter(n=>!n.seen_at)),80);
+  return `<div class="public-card"><div class="student-banner"><div class="student-avatar">${esc((s.full_name||'ط')[0])}</div><div><h2 style="margin:0">${esc(s.full_name)}</h2><div class="muted">الصف ${esc(s.grade||'—')} — الشعبة ${esc(s.class_name||'—')}</div><div class="hint">اسم الجد: ${esc(s.grandfather_name||'—')} ${s.location_label?`— ${esc(s.location_label)}`:''}</div></div>${unread?`<span class="notification-count">${unread} جديد</span>`:''}</div><div class="portal-actions section">${isAndroidApp()?'<span id="pushStatus"><button class="btn secondary" onclick="requestAndroidParentPush(localStorage.getItem(\'manara_parent_push_code\')||pendingParentPushCode)">🔔 تفعيل إشعارات الهاتف</button></span>':'<button class="btn secondary" onclick="enableParentNotifications()">🔔 تفعيل إشعارات المتصفح</button>'}${unread?'<button class="btn outline" onclick="markPortalNotificationsSeen()">تحديد الإشعارات كمقروءة</button>':''}<button class="btn danger" onclick="logoutParentPortal()">تسجيل الخروج</button></div>${notes.length?`<div class="section"><div class="row between"><h3>ملاحظات الطالب</h3><span class="badge warning">تصل مباشرة على كود الطالب</span></div>${notes.map(n=>`<div class="student-note ${n.importance==='مهم'?'important':''}"><div class="row between"><b>${esc(n.title||'ملاحظة من المدرسة')}</b><small>${esc((n.created_at||'').slice(0,10))}</small></div><div>${esc(n.content)}</div>${n.image_url?`<a href="${esc(n.image_url)}" target="_blank" rel="noopener"><img src="${esc(n.image_url)}" alt="صورة مرفقة بالملاحظة" style="display:block;width:100%;max-width:520px;max-height:520px;object-fit:contain;border-radius:16px;margin-top:12px;background:#f3f5f4"></a>`:''}<small class="muted">${esc(n.category||'ملاحظة عامة')}</small></div>`).join('')}</div>`:''}<div class="portal-kpis section"><div class="card"><span class="muted">الغياب</span><strong>${absent}</strong></div><div class="card"><span class="muted">المعدل</span><strong>${avg}${avg==='—'?'':'%'}</strong></div></div><div class="section"><h3>النتائج</h3><div class="table-wrap"><table><thead><tr><th>المادة</th><th>الاختبار</th><th>التاريخ</th><th>العلامة</th></tr></thead><tbody>${gr.map(g=>`<tr><td>${esc(g.subject_name||g.subject||'')}</td><td>${esc(g.exam_name||g.exam||'')}</td><td>${esc(g.date||'—')}</td><td>${esc(g.score)}/${esc(g.max_score||g.max||100)}</td></tr>`).join('')||'<tr><td colspan="4" class="empty">لا توجد نتائج بعد</td></tr>'}</tbody></table></div></div><div class="section"><h3>سجل الغياب</h3><div class="table-wrap"><table><thead><tr><th>التاريخ</th><th>ملاحظة</th></tr></thead><tbody>${at.map(a=>`<tr><td>${esc(a.date)}</td><td>${esc(a.note||'—')}</td></tr>`).join('')||'<tr><td colspan="2" class="empty">لا يوجد غياب مسجل حتى الآن</td></tr>'}</tbody></table></div></div>${phoneCard}<div class="section"><h3>إعلانات المدرسة</h3>${(p.announcements||[]).map(a=>`<div class="notice"><b>${esc(a.title)}</b><div>${esc(a.content)}</div><small class="muted">${esc(a.created_date||a.date||'')}</small></div>`).join('')||'<div class="empty">لا توجد إعلانات</div>'}</div></div>`;
+}
+
+async function v614ScopedUpdateConfig(scope){
+  if(DEMO||!isAndroidApp()||!sb)return null;
+  try{
+    const fields=scope==='parent'
+      ?'parent_latest_version_code,parent_latest_version_name,parent_minimum_version_code,parent_force_update,android_download_url,updated_at'
+      :'staff_latest_version_code,staff_latest_version_name,staff_minimum_version_code,staff_force_update,android_download_url,updated_at';
+    const {data,error}=await sb.from('app_update_config').select(fields).eq('id',1).maybeSingle();
+    if(error||!data)return null;return data;
+  }catch(_){return null;}
+}
+async function v614CheckScopedUpdate(scope){
+  const cfg=await v614ScopedUpdateConfig(scope);if(!cfg)return true;
+  const isParent=scope==='parent',min=Number(isParent?cfg.parent_minimum_version_code:cfg.staff_minimum_version_code)||0,forced=(isParent?cfg.parent_force_update:cfg.staff_force_update)!==false;
+  if(forced&&min>APP_VERSION_CODE){
+    state.updateScope=scope;state.updateConfig={...cfg,latest_version_name:(isParent?cfg.parent_latest_version_name:cfg.staff_latest_version_name)||'الإصدار الجديد'};state.screen='scoped-update';render();return false;
+  }
+  return true;
+}
+function v614ScopedUpdateHtml(){
+  const cfg=state.updateConfig||{},scope=state.updateScope||'staff',latest=esc(cfg.latest_version_name||'الإصدار الجديد'),isParent=scope==='parent';
+  return `<div class="public-page"><div class="public-shell" style="max-width:560px"><div class="auth-card" style="margin-top:7vh;text-align:center">${logo().replace('<img','<img style="width:105px;height:105px;border-radius:50%;object-fit:cover;margin-bottom:12px"')}<h2 style="margin-bottom:8px">يتوفر تحديث جديد</h2><div class="message warning" style="text-align:right;line-height:1.9">${isParent?'هذا التحديث يخص بوابة ولي الأمر.':'هذا التحديث يخص الإدارة والمدرسين.'} الإصدار المطلوب <b>V${latest}</b>.</div><div class="hint" style="margin:12px 0">الإصدار الموجود على جهازك: V${esc(APP_VERSION_LABEL)}</div><button class="btn" style="width:100%;font-size:17px" onclick="openMandatoryAndroidUpdate()">⬇ تحميل التحديث الآن</button>${isParent?'<button class="btn outline" style="width:100%;margin-top:10px" onclick="v614BypassParentUpdateForStaff()">دخول الإدارة / المدرسين</button>':''}<div class="hint" style="margin-top:12px">ثبّت النسخة الجديدة فوق القديمة بدون حذف التطبيق.</div></div></div></div>`;
+}
+function v614BypassParentUpdateForStaff(){state.updateScope='';state.updateConfig=null;state.screen='login';render();}
+async function enforceMandatoryAndroidUpdate(){return true;}
+function render(){
+  const app=document.getElementById('app');
+  if(state.screen==='scoped-update')app.innerHTML=v614ScopedUpdateHtml();
+  else if(state.screen==='parent')app.innerHTML=parentPage();
+  else if(state.screen==='login')app.innerHTML=loginPage();
+  else if(state.screen==='reset')app.innerHTML=resetPasswordPage();
+  else if(state.screen==='mfa')app.innerHTML=mfaLoginPage();
+  else if(state.screen==='mfa-enroll')app.innerHTML=mfaEnrollPage();
+  else app.innerHTML=appPage();
+  renderDesignerCredit();setTimeout(applyMobileUi,0);
+}
+async function completeSupabaseUser(user,profile){
+  state.pendingAuthUser=null;state.pendingAuthProfile=null;state.mfaEnroll=null;state.user={id:user.id,name:profile.full_name||user.email,email:user.email};state.role=profile.role;
+  if(!(await v614CheckScopedUpdate('staff')))return;
+  state.screen='app';state.tab='home';await loadSupabaseData();
+}
+const v614FindStudentPortalBase=findStudentPortal;
+findStudentPortal=async function(auto=false){
+  if(!(await v614CheckScopedUpdate('parent')))return;
+  return v614FindStudentPortalBase(auto);
+};
