@@ -7,8 +7,8 @@ const LOGIN_REMEMBER_KEY = 'almanara_login_remember';
 const PARENT_CODE_KEY = 'manara_parent_saved_code';
 const FCM_TOKEN_KEY = 'manara_fcm_token';
 const PUBLIC_PARENT_PORTAL_URL = 'https://abdoali07979-collab.github.io/manara-school/';
-const APP_VERSION_CODE = 20;
-const APP_VERSION_LABEL = '6.15.1';
+const APP_VERSION_CODE = 21;
+const APP_VERSION_LABEL = '6.15.2';
 const UPDATE_CACHE_KEY = 'manara_android_update_config_v1';
 let sb = null;
 let state = { screen:'parent', user:null, role:null, tab:'home', portal:null, data:null, sidebar:false, loginNotice:'', portalPoll:null, pendingAuthUser:null, pendingAuthProfile:null, mfaEnroll:null };
@@ -2047,4 +2047,198 @@ function page_home(){
   }
   const s=d.dashboardStats||{},unread=(d.notifications||[]).filter(n=>!n.seen_at).length;
   return `<div class="kpi-grid"><div class="card kpi"><div><b>إجمالي الطلاب</b><strong>${moneyLike(s.total_students??d.students?.length)}</strong></div><div class="kpi-icon">♟</div></div><div class="card kpi"><div><b>غائب اليوم</b><strong>${moneyLike(todayAbs.length)}</strong></div><div class="kpi-icon">×</div></div><div class="card kpi"><div><b>ملاحظات اليوم</b><strong>${moneyLike(todayNotes.length)}</strong></div><div class="kpi-icon">✎</div></div><div class="card kpi"><div><b>إشعارات أهل غير مقروءة</b><strong>${moneyLike(unread)}</strong></div><div class="kpi-icon">🔔</div></div></div><div class="two-col section"><div class="card"><h3 class="section-title">المتابعة اليومية</h3><div class="stack"><div class="row between"><span>عدد الطلاب الغائبين</span><b>${moneyLike(todayAbs.length)}</b></div><div class="row between"><span>ملاحظات أُرسلت للأهل اليوم</span><b>${moneyLike(todayNotes.length)}</b></div><button class="btn" onclick="setTab('dailyabsence')">غائبو اليوم</button><button class="btn secondary" onclick="setTab('dailynotes')">ملاحظات اليوم</button></div></div><div class="card"><h3 class="section-title">اختصارات</h3><div class="stack"><button class="btn" onclick="setTab('attendance')">تسجيل الغياب</button><button class="btn secondary" onclick="setTab('reports')">الجرد الشهري والمجاميع</button><button class="btn secondary" onclick="setTab('archive')">الأرشيف السنوي</button></div></div></div>`;
+}
+
+
+/* =========================================================
+   MANARA V6.15.2 — pagination + reliable live search + weekly absence
+   - Loads ALL students in pages (no 1000-row truncation).
+   - Keeps student search live after note/edit/move operations.
+   - Replaces the daily absence dashboard with current-week absence.
+   - Week starts Sunday and ends Saturday; monthly/yearly archive is unchanged.
+   ========================================================= */
+
+function v6152SearchKey(value=''){
+  return String(value??'')
+    .normalize('NFKD')
+    .replace(/[\u064B-\u065F\u0670]/g,'')
+    .replace(/[أإآ]/g,'ا')
+    .replace(/ى/g,'ي')
+    .replace(/ة/g,'ه')
+    .replace(/\s+/g,' ')
+    .trim()
+    .toLowerCase();
+}
+
+async function v6152FetchAll(makeQuery,{pageSize=1000,maxRows=50000}={}){
+  const rows=[];
+  for(let from=0;from<maxRows;from+=pageSize){
+    const {data,error}=await makeQuery(from,from+pageSize-1);
+    if(error)throw error;
+    const batch=data||[];
+    rows.push(...batch);
+    if(batch.length<pageSize)break;
+  }
+  return rows;
+}
+
+function v6152MapStudent(x){
+  return {
+    ...x,
+    full_name:v611CombineStudentName(x.full_name,x.family_name),
+    room_name:x.rooms?.name,
+    room_code:x.rooms?.code,
+    floor_name:x.rooms?.floors?.name,
+    building_name:x.rooms?.floors?.buildings?.name,
+    location_label:x.rooms?`${x.rooms?.floors?.buildings?.name||''} / ${x.rooms?.name||''}`:''
+  };
+}
+
+async function loadSupabaseData(){
+  if(DEMO)return;
+  const safe=(r,def)=>r?.error?def:(r?.data??def);
+  const studentSelect='*,rooms(id,code,name,grade,section_label,floor_id,floors(name,building_id,buildings(name)))';
+
+  if(state.role==='admin'){
+    const [students,attendance,grades,notes,notifications,yearRecords,an,su,pr,se,au,bu,fl,ro,ta,yrs,dash]=await Promise.all([
+      v6152FetchAll((from,to)=>sb.from('students').select(studentSelect).order('created_at',{ascending:false}).order('id',{ascending:false}).range(from,to)),
+      v6152FetchAll((from,to)=>sb.from('attendance').select('*').order('date',{ascending:false}).order('id',{ascending:false}).range(from,to)),
+      v6152FetchAll((from,to)=>sb.from('grades').select('*,grade_items(title,max_score,exam_date,academic_year,subjects(name))').order('created_at',{ascending:false}).order('id',{ascending:false}).range(from,to)),
+      v6152FetchAll((from,to)=>sb.from('student_notes').select('*').order('created_at',{ascending:false}).order('id',{ascending:false}).range(from,to)),
+      v6152FetchAll((from,to)=>sb.from('parent_notifications').select('*').order('created_at',{ascending:false}).order('id',{ascending:false}).range(from,to)),
+      v6152FetchAll((from,to)=>sb.from('student_year_records').select('*').order('student_name').order('id').range(from,to)),
+      sb.from('announcements').select('*').order('created_at',{ascending:false}),
+      sb.from('subjects').select('*').order('name'),
+      sb.from('profiles').select('id,full_name,role,active,created_at').eq('role','teacher').order('created_at',{ascending:false}),
+      sb.from('school_settings').select('*').limit(1).maybeSingle(),
+      sb.from('audit_logs').select('*').order('created_at',{ascending:false}).limit(300),
+      sb.from('buildings').select('*').order('code'),
+      sb.from('floors').select('*').order('floor_order'),
+      sb.from('rooms').select('*').order('room_order'),
+      sb.from('teacher_room_assignments').select('*'),
+      sb.from('academic_years').select('*').order('label',{ascending:false}),
+      sb.rpc('report_dashboard_stats',{p_date:today()})
+    ]);
+    state.data={
+      students:v612SortedStudents((students||[]).map(v6152MapStudent)),
+      attendance:attendance||[],
+      grades:(grades||[]).map(x=>({...x,exam_name:x.grade_items?.title,max_score:x.grade_items?.max_score,date:x.grade_items?.exam_date,academic_year:x.grade_items?.academic_year,subject_name:x.grade_items?.subjects?.name})),
+      announcements:safe(an,[]),subjects:safe(su,[]),teachers:safe(pr,[]),settings:safe(se,{}),audit:safe(au,[]),
+      buildings:safe(bu,[]),floors:safe(fl,[]),rooms:safe(ro,[]),
+      studentNotes:await hydrateNoteImages(notes||[]),notifications:notifications||[],teacherAssignments:safe(ta,[]),
+      academicYears:safe(yrs,[]),studentYearRecords:yearRecords||[],dashboardStats:safe(dash,null)
+    };
+  }else{
+    const [ta,se,bu,fl,ro,yrs,su]=await Promise.all([
+      sb.from('teacher_room_assignments').select('*').eq('teacher_id',state.user.id),
+      sb.from('school_settings').select('*').limit(1).maybeSingle(),
+      sb.from('buildings').select('*').order('code'),
+      sb.from('floors').select('*').order('floor_order'),
+      sb.from('rooms').select('*').order('room_order'),
+      sb.from('academic_years').select('*').order('label',{ascending:false}),
+      sb.from('subjects').select('*').order('name')
+    ]);
+    const teacherAssignments=safe(ta,[]),allowedRoomIds=teacherAssignments.map(x=>String(x.room_id)).filter(Boolean);
+    let rawStudents=[];
+    if(allowedRoomIds.length){
+      rawStudents=await v6152FetchAll((from,to)=>sb.from('students').select(studentSelect).in('room_id',allowedRoomIds).order('created_at',{ascending:false}).order('id',{ascending:false}).range(from,to));
+    }
+    const students=v612SortedStudents((rawStudents||[]).map(v6152MapStudent));
+    const allowedStudentIds=new Set(students.map(x=>String(x.id)));
+    const [attendanceAll,gradesAll,notesAll]=await Promise.all([
+      v6152FetchAll((from,to)=>sb.from('attendance').select('*').order('date',{ascending:false}).order('id',{ascending:false}).range(from,to)),
+      v6152FetchAll((from,to)=>sb.from('grades').select('*,grade_items(title,max_score,exam_date,academic_year,subjects(name))').order('created_at',{ascending:false}).order('id',{ascending:false}).range(from,to)),
+      v6152FetchAll((from,to)=>sb.from('student_notes').select('*').order('created_at',{ascending:false}).order('id',{ascending:false}).range(from,to))
+    ]);
+    const attendance=(attendanceAll||[]).filter(x=>allowedStudentIds.has(String(x.student_id)));
+    const grades=(gradesAll||[]).filter(x=>allowedStudentIds.has(String(x.student_id))).map(x=>({...x,exam_name:x.grade_items?.title,max_score:x.grade_items?.max_score,date:x.grade_items?.exam_date,academic_year:x.grade_items?.academic_year,subject_name:x.grade_items?.subjects?.name}));
+    const teacherNotes=(notesAll||[]).filter(x=>allowedStudentIds.has(String(x.student_id)));
+    state.data={students,attendance,grades,announcements:[],subjects:safe(su,[]),teachers:[],settings:safe(se,{}),audit:[],buildings:safe(bu,[]),floors:safe(fl,[]),rooms:safe(ro,[]),studentNotes:await hydrateNoteImages(teacherNotes),notifications:[],teacherAssignments,academicYears:safe(yrs,[]),studentYearRecords:[],dashboardStats:null};
+  }
+}
+
+function studentTableHtml(q=''){
+  const needle=v6152SearchKey(q);
+  const rows=v612SortedStudents(state.data.students||[]).filter(st=>{
+    if(!needle)return true;
+    return [v612StudentDisplayName(st),st.father_name,st.mother_name,st.grandfather_name,st.family_name,st.parent_phone,st.access_code,st.grade,st.class_name,st.building_name,st.floor_name,st.room_name,roomLocation(st.room_id)]
+      .some(v=>v6152SearchKey(v).includes(needle));
+  });
+  return `<div class="table-wrap"><table><thead><tr><th>الطالب</th><th>الأب</th><th>الجد</th><th>الصف</th><th>الموقع</th><th>الكود</th><th>الحالة</th><th>إجراء</th></tr></thead><tbody>${rows.map(st=>`<tr><td>${v614StudentAvatarCell(st)}</td><td>${esc(st.father_name||'—')}</td><td><b>${esc(st.grandfather_name||'—')}</b></td><td>${esc(st.grade||'—')} ${st.class_name?`/ ${esc(st.class_name)}`:''}</td><td>${esc(st.location_label||roomLocation(st.room_id))}</td><td><span class="code">${esc(st.access_code||'')}</span></td><td><span class="badge ${st.active===false?'inactive':'active'}">${st.active===false?'موقوف':'فعال'}</span></td><td>${state.role==='admin'?`<div class="row"><button class="btn small secondary" onclick="openStudentModal('${st.id}')">تعديل</button><button class="btn small warning" onclick="openMoveStudentModal('${st.id}')">نقل</button><button class="btn small warning" onclick="regenerateCode('${st.id}')">كود جديد</button><button class="btn small secondary" onclick="showStudentQr('${st.id}')">QR</button><button class="btn small" onclick="openNoteModal('${st.id}')">ملاحظة</button><button class="btn small danger" onclick="deleteStudent('${st.id}')">حذف</button></div>`:`<div class="row"><button class="btn small secondary" onclick="openStudentModal('${st.id}')">تعديل</button><button class="btn small warning" onclick="openMoveStudentModal('${st.id}')">نقل</button><button class="btn small secondary" onclick="showStudentQr('${st.id}')">QR</button><button class="btn small" onclick="openNoteModal('${st.id}')">ملاحظة للأهل</button><button class="btn small danger" onclick="deleteStudent('${st.id}')">حذف</button></div>`}</td></tr>`).join('')||'<tr><td colspan="8" class="empty">لا توجد نتائج</td></tr>'}</tbody></table></div>`;
+}
+
+function v6152RememberStudentSearch(){
+  const el=document.getElementById('studentSearch');
+  if(el)state.v6152StudentSearch=el.value||'';
+}
+function page_students(){
+  if(!['admin','teacher'].includes(state.role))return noAccess();
+  const teacher=state.role==='teacher',q=String(state.v6152StudentSearch||'');
+  setTimeout(v614LoadStudentListPhotos,35);
+  return `<div class="toolbar"><div><h2 class="section-title">${teacher?'طلاب الشعب المخصصة لي':'سجل الطلاب'}</h2><div class="muted">${teacher?'طلابك فقط، ويتم تحميل جميع طلاب شعبك بدون حد 1000 طالب.':'إدارة الطلاب مع تحميل كامل السجل بدون حد 1000 طالب.'}</div></div><button class="btn" onclick="openStudentModal()">+ تسجيل طالب جديد</button></div>${teacher?`<div class="role-note">الشعب المخصصة لك: <b>${assignedRoomsLabel(state.user.id)}</b></div>`:''}<div class="card"><div class="toolbar"><div class="field search"><label>بحث سريع</label><input id="studentSearch" value="${esc(q)}" placeholder="الاسم، الكود، الصف..." oninput="filterStudentTable()"></div><div class="hint">عدد الطلاب: <b>${state.data.students.length}</b></div></div><div id="studentTable">${studentTableHtml(q)}</div></div>`;
+}
+function filterStudentTable(){
+  const input=document.getElementById('studentSearch'),box=document.getElementById('studentTable');if(!box)return;
+  state.v6152StudentSearch=input?.value||'';
+  box.innerHTML=studentTableHtml(state.v6152StudentSearch);applyMobileUi();setTimeout(v614LoadStudentListPhotos,20);
+}
+
+const v6152OpenStudentModalBase=openStudentModal;
+openStudentModal=function(id=''){v6152RememberStudentSearch();return v6152OpenStudentModalBase(id);};
+const v6152OpenMoveStudentModalBase=openMoveStudentModal;
+openMoveStudentModal=function(id){v6152RememberStudentSearch();return v6152OpenMoveStudentModalBase(id);};
+const v6152OpenNoteModalBase=openNoteModal;
+openNoteModal=function(studentId=''){v6152RememberStudentSearch();return v6152OpenNoteModalBase(studentId);};
+
+function v6152DateKey(d){
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function v6152WeekBounds(day=today()){
+  const d=new Date(String(day)+'T12:00:00');
+  if(Number.isNaN(d.getTime()))return {start:today(),end:today()};
+  const start=new Date(d);start.setDate(start.getDate()-start.getDay());
+  const end=new Date(start);end.setDate(end.getDate()+6);
+  return {start:v6152DateKey(start),end:v6152DateKey(end)};
+}
+async function v615LoadDailyArchive(force=false){
+  const {start,end}=v6152WeekBounds(today()),key=`${start}|${end}`;
+  if(state.v615DailyLoading)return;
+  if(!force&&state.v615DailyDate===key&&Array.isArray(state.v615DailyRows))return;
+  state.v615DailyLoading=true;
+  try{state.v615DailyRows=await v615FetchAbsenceArchive(start,end);state.v615DailyDate=key;state.v615DailyError='';}
+  catch(e){state.v615DailyRows=[];state.v615DailyDate=key;state.v615DailyError=authErrorArabic(e.message);}
+  finally{state.v615DailyLoading=false;if(state.tab==='dailyabsence')render();}
+}
+function page_dailyabsence(){
+  if(!['admin','teacher'].includes(state.role))return noAccess();
+  const {start,end}=v6152WeekBounds(today()),key=`${start}|${end}`;
+  if(state.v615DailyDate!==key&&!state.v615DailyLoading)setTimeout(()=>v615LoadDailyArchive(),0);
+  const rows=state.v615DailyDate===key?(state.v615DailyRows||[]):[],loading=state.v615DailyLoading||state.v615DailyDate!==key;
+  const error=state.v615DailyError?`<div class="message error">تعذر تحميل غياب الأسبوع: ${esc(state.v615DailyError)}</div>`:'';
+  const visibleRows=state.role==='teacher'?rows.filter(r=>assignedRoomIds().map(String).includes(String(r.room_id))):rows;
+  return `<div class="toolbar"><div><h2 class="section-title">غياب الأسبوع</h2><div class="muted">يعرض غياب الأسبوع الحالي من <b>${esc(start)}</b> إلى <b>${esc(end)}</b>. مع بداية كل يوم أحد يبدأ أسبوع جديد تلقائياً.</div></div><div class="row"><span class="badge absent">${visibleRows.length} حالة غياب</span><button class="btn secondary" onclick="v615LoadDailyArchive(true)">↻ تحديث</button><button class="btn" onclick="setTab('attendance')">+ تسجيل غياب</button></div></div><div class="message ok">كل حالة تبقى محفوظة فوراً في الجرد الشهري والأرشيف السنوي. إذا ألغيت غياباً بالخطأ يُصحح من الجميع تلقائياً.</div>${error}<div class="card section">${loading?'<div class="empty">جاري تحميل غياب الأسبوع...</div>':`<div class="table-wrap"><table><thead><tr><th>التاريخ</th><th>الطالب الغائب</th><th>الصف / الشعبة</th><th>الموقع</th><th>ملاحظة</th><th>إجراء</th></tr></thead><tbody>${visibleRows.map(r=>`<tr><td><b>${esc(r.absence_date||'—')}</b></td><td><b>${esc(r.student_name||'—')}</b></td><td>${esc(r.grade||'—')} ${r.class_name?`/ ${esc(r.class_name)}`:''}</td><td>${esc(r.location_label||'—')}</td><td>${esc(r.note||'—')}</td><td><button class="btn small danger" onclick="cancelAbsenceRow('${r.student_id}','${r.absence_date}')">إلغاء الغياب</button></td></tr>`).join('')||'<tr><td colspan="6" class="empty">لا يوجد غياب مسجل ضمن الأسبوع الحالي</td></tr>'}</tbody></table></div>`}</div>`;
+}
+
+function navItems(){
+  if(state.role==='teacher') return [
+    ['home','⌂','الرئيسية'],['buildings','▦','الصفوف والشعب'],['students','♟','طلابي'],['attendance','×','تسجيل الغياب'],['dailyabsence','☷','غياب الأسبوع'],['dailynotes','✎','ملاحظات اليوم'],['grades','▤','النتائج'],['reports','▥','الجرد الشهري'],['notes','≡','كل الملاحظات']
+  ];
+  return [
+    ['home','⌂','الرئيسية'],['buildings','▦','الصفوف والشعب'],['students','♟','الطلاب'],['attendance','×','تسجيل الغياب'],['dailyabsence','☷','غياب الأسبوع'],['dailynotes','✎','ملاحظات اليوم'],['reports','▥','الجرد الشهري'],['archive','▧','الأرشيف السنوي'],['notes','≡','كل الملاحظات'],['grades','▤','النتائج'],['announcements','◉','الإعلانات'],['teachers','♙','المدرسون'],['audit','≡','سجل العمليات'],['settings','⚙','الإعدادات']
+  ];
+}
+function appPage(){
+  const labels={home:'الرئيسية',buildings:'الصفوف والشعب',students:'الطلاب',attendance:'تسجيل الغياب',dailyabsence:'غياب الأسبوع',dailynotes:'ملاحظات اليوم',reports:'الجرد الشهري',archive:'الأرشيف السنوي',notes:'كل الملاحظات',grades:'النتائج',announcements:'الإعلانات',teachers:'إدارة المدرسين',audit:'سجل العمليات',settings:'الإعدادات'};
+  if(state.role==='teacher'&&!['home','buildings','students','attendance','dailyabsence','dailynotes','grades','reports','notes'].includes(state.tab))state.tab='home';
+  const topLogo=logo().replace('<img','<img class="top-logo"'),watermark=logo().replace('<img','<img class="content-watermark"');
+  return `<div class="app-shell"><aside class="sidebar ${state.sidebar?'open':''}"><div class="side-brand">${logo()}<div><b>${esc(state.data?.settings?.school_name||'مدرسة المنارة الخاصة')}</b><small>MANARA PRIVATE SCHOOL</small></div><button class="drawer-close" onclick="toggleSidebar(false)" aria-label="إغلاق">×</button></div><div class="user-card"><b>${esc(state.user?.name||'')}</b><small>${state.role==='admin'?'مدير النظام — تحكم كامل':'مدرس — طلاب + غياب + نتائج + ملاحظات ضمن الشعب المخصصة'}</small></div><div class="side-label">القائمة الرئيسية</div><nav class="side-nav">${navItems().map(n=>`<button class="${state.tab===n[0]?'active':''}" onclick="setTab('${n[0]}')"><i class="nav-icon">${n[1]}</i>${n[2]}</button>`).join('')}</nav><div class="side-label" style="margin-top:16px">الحساب</div><nav class="side-nav"><button onclick="goParent()"><i class="nav-icon">◫</i>معاينة بوابة الأهل</button><button onclick="logout()"><i class="nav-icon">↪</i>تسجيل الخروج</button></nav></aside><div class="drawer-backdrop ${state.sidebar?'show':''}" onclick="toggleSidebar(false)"></div><main class="main"><header class="topbar"><div class="row"><button class="btn outline mobile-menu" onclick="toggleSidebar()">☰</button><div class="page-title"><b>${labels[state.tab]||''}</b><small>${state.role==='admin'?'لوحة الإدارة الرئيسية':'طلابك وشعبك فقط'}</small></div></div>${topLogo}<div class="top-actions"><span class="badge ${state.role}">${state.role==='admin'?'الإدارة':'مدرس'}</span></div></header><section class="content">${watermark}${pageContent()}</section></main></div>`;
+}
+function page_home(){
+  const d=state.data||{},todayNotes=v6151TodayNotes(),{start,end}=v6152WeekBounds(today());
+  const weekAbs=(d.attendance||[]).filter(x=>x.status==='غائب'&&String(x.date||'')>=start&&String(x.date||'')<=end);
+  if(state.role==='teacher'){
+    return `<div class="role-note">حسابك يبقى مسجلاً حتى تضغط «تسجيل الخروج». صلاحيتك محصورة بالشعب التي حددتها الإدارة.</div><div class="kpi-grid section"><div class="card kpi"><div><b>الطلاب المسموحون</b><strong>${d.students?.length||0}</strong></div><div class="kpi-icon">♟</div></div><div class="card kpi"><div><b>غياب الأسبوع</b><strong>${weekAbs.length}</strong></div><div class="kpi-icon">×</div></div><div class="card kpi"><div><b>ملاحظات اليوم</b><strong>${todayNotes.length}</strong></div><div class="kpi-icon">✎</div></div><div class="card kpi"><div><b>النتائج المسجلة</b><strong>${(d.grades||[]).length}</strong></div><div class="kpi-icon">▤</div></div></div><div class="two-col section"><div class="card"><div class="row between"><div><h3 class="section-title">غياب الأسبوع</h3><div class="muted">من ${esc(start)} إلى ${esc(end)}، ويتجدد تلقائياً كل أسبوع.</div></div><button class="btn" onclick="setTab('dailyabsence')">عرض غياب الأسبوع</button></div></div><div class="card"><div class="row between"><div><h3 class="section-title">ملاحظات اليوم</h3><div class="muted">الملاحظات التي وصلت للأهل اليوم فقط.</div></div><button class="btn secondary" onclick="setTab('dailynotes')">عرض ملاحظات اليوم</button></div></div></div><div class="card section"><div class="row between"><div><h3 class="section-title">الجرد الشهري</h3><div class="muted">يتضمن الغياب فقط، ولا تدخل ملاحظات اليوم ضمن الجرد.</div></div><button class="btn secondary" onclick="setTab('reports')">فتح الجرد</button></div></div>`;
+  }
+  const s=d.dashboardStats||{},unread=(d.notifications||[]).filter(n=>!n.seen_at).length;
+  return `<div class="kpi-grid"><div class="card kpi"><div><b>إجمالي الطلاب</b><strong>${moneyLike(d.students?.length||s.total_students||0)}</strong></div><div class="kpi-icon">♟</div></div><div class="card kpi"><div><b>غياب الأسبوع</b><strong>${moneyLike(weekAbs.length)}</strong></div><div class="kpi-icon">×</div></div><div class="card kpi"><div><b>ملاحظات اليوم</b><strong>${moneyLike(todayNotes.length)}</strong></div><div class="kpi-icon">✎</div></div><div class="card kpi"><div><b>إشعارات أهل غير مقروءة</b><strong>${moneyLike(unread)}</strong></div><div class="kpi-icon">🔔</div></div></div><div class="two-col section"><div class="card"><h3 class="section-title">المتابعة الأسبوعية</h3><div class="stack"><div class="row between"><span>حالات الغياب هذا الأسبوع</span><b>${moneyLike(weekAbs.length)}</b></div><div class="row between"><span>ملاحظات أُرسلت للأهل اليوم</span><b>${moneyLike(todayNotes.length)}</b></div><button class="btn" onclick="setTab('dailyabsence')">غياب الأسبوع</button><button class="btn secondary" onclick="setTab('dailynotes')">ملاحظات اليوم</button></div></div><div class="card"><h3 class="section-title">اختصارات</h3><div class="stack"><button class="btn" onclick="setTab('attendance')">تسجيل الغياب</button><button class="btn secondary" onclick="setTab('reports')">الجرد الشهري والمجاميع</button><button class="btn secondary" onclick="setTab('archive')">الأرشيف السنوي</button></div></div></div>`;
 }
