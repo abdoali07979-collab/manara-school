@@ -7,8 +7,8 @@ const LOGIN_REMEMBER_KEY = 'almanara_login_remember';
 const PARENT_CODE_KEY = 'manara_parent_saved_code';
 const FCM_TOKEN_KEY = 'manara_fcm_token';
 const PUBLIC_PARENT_PORTAL_URL = 'https://abdoali07979-collab.github.io/manara-school/';
-const APP_VERSION_CODE = 21;
-const APP_VERSION_LABEL = '6.15.2';
+const APP_VERSION_CODE = 22;
+const APP_VERSION_LABEL = '6.15.3';
 const UPDATE_CACHE_KEY = 'manara_android_update_config_v1';
 let sb = null;
 let state = { screen:'parent', user:null, role:null, tab:'home', portal:null, data:null, sidebar:false, loginNotice:'', portalPoll:null, pendingAuthUser:null, pendingAuthProfile:null, mfaEnroll:null };
@@ -2051,7 +2051,7 @@ function page_home(){
 
 
 /* =========================================================
-   MANARA V6.15.2 — pagination + reliable live search + weekly absence
+   MANARA V6.15.3 — pagination + reliable live search + weekly absence
    - Loads ALL students in pages (no 1000-row truncation).
    - Keeps student search live after note/edit/move operations.
    - Replaces the daily absence dashboard with current-week absence.
@@ -2241,4 +2241,164 @@ function page_home(){
   }
   const s=d.dashboardStats||{},unread=(d.notifications||[]).filter(n=>!n.seen_at).length;
   return `<div class="kpi-grid"><div class="card kpi"><div><b>إجمالي الطلاب</b><strong>${moneyLike(d.students?.length||s.total_students||0)}</strong></div><div class="kpi-icon">♟</div></div><div class="card kpi"><div><b>غياب الأسبوع</b><strong>${moneyLike(weekAbs.length)}</strong></div><div class="kpi-icon">×</div></div><div class="card kpi"><div><b>ملاحظات اليوم</b><strong>${moneyLike(todayNotes.length)}</strong></div><div class="kpi-icon">✎</div></div><div class="card kpi"><div><b>إشعارات أهل غير مقروءة</b><strong>${moneyLike(unread)}</strong></div><div class="kpi-icon">🔔</div></div></div><div class="two-col section"><div class="card"><h3 class="section-title">المتابعة الأسبوعية</h3><div class="stack"><div class="row between"><span>حالات الغياب هذا الأسبوع</span><b>${moneyLike(weekAbs.length)}</b></div><div class="row between"><span>ملاحظات أُرسلت للأهل اليوم</span><b>${moneyLike(todayNotes.length)}</b></div><button class="btn" onclick="setTab('dailyabsence')">غياب الأسبوع</button><button class="btn secondary" onclick="setTab('dailynotes')">ملاحظات اليوم</button></div></div><div class="card"><h3 class="section-title">اختصارات</h3><div class="stack"><button class="btn" onclick="setTab('attendance')">تسجيل الغياب</button><button class="btn secondary" onclick="setTab('reports')">الجرد الشهري والمجاميع</button><button class="btn secondary" onclick="setTab('archive')">الأرشيف السنوي</button></div></div></div>`;
+}
+
+/* =========================================================
+   MANARA V6.15.3 — Admin-only professional Excel export per section
+   - Based on the user's Excel template order.
+   - Includes all student information currently stored by the app.
+   - Students are sorted alphabetically in Arabic.
+   - Workbook print setup: A4 landscape, fit to 1 page wide.
+   - Notes column is intentionally wider and wrapped.
+   - No Supabase schema change is required.
+   ========================================================= */
+
+const V6153_XLSX_MIME='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+function v6153XmlEscape(value=''){
+  return String(value??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;');
+}
+function v6153FilePart(value='شعبة'){
+  return String(value||'شعبة').trim().replace(/[\\/:*?"<>|]+/g,'-').replace(/\s+/g,' ').slice(0,90)||'شعبة';
+}
+function v6153ColName(n){
+  let s='';n=Number(n)+1;while(n>0){const r=(n-1)%26;s=String.fromCharCode(65+r)+s;n=Math.floor((n-1)/26);}return s;
+}
+function v6153Utf8(text){return new TextEncoder().encode(String(text));}
+function v6153U16(view,o,v){view.setUint16(o,v,true);}
+function v6153U32(view,o,v){view.setUint32(o,v>>>0,true);}
+let v6153CrcTable=null;
+function v6153Crc32(bytes){
+  if(!v6153CrcTable){v6153CrcTable=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1);v6153CrcTable[n]=c>>>0;}}
+  let c=0xFFFFFFFF;for(let i=0;i<bytes.length;i++)c=v6153CrcTable[(c^bytes[i])&255]^(c>>>8);return (c^0xFFFFFFFF)>>>0;
+}
+function v6153DosDateTime(date=new Date()){
+  const y=Math.max(1980,date.getFullYear()),m=date.getMonth()+1,d=date.getDate(),hh=date.getHours(),mm=date.getMinutes(),ss=Math.floor(date.getSeconds()/2);
+  return {time:((hh<<11)|(mm<<5)|ss)&0xffff,date:(((y-1980)<<9)|(m<<5)|d)&0xffff};
+}
+function v6153ZipStore(files){
+  const entries=[];let localTotal=0;const dt=v6153DosDateTime();
+  for(const f of files){const name=v6153Utf8(f.name),data=f.data instanceof Uint8Array?f.data:v6153Utf8(f.data),crc=v6153Crc32(data),localSize=30+name.length+data.length;entries.push({name,data,crc,offset:localTotal});localTotal+=localSize;}
+  let centralTotal=0;for(const e of entries)centralTotal+=46+e.name.length;
+  const out=new Uint8Array(localTotal+centralTotal+22);const view=new DataView(out.buffer);let p=0;
+  for(const e of entries){
+    v6153U32(view,p,0x04034b50);v6153U16(view,p+4,20);v6153U16(view,p+6,0x0800);v6153U16(view,p+8,0);v6153U16(view,p+10,dt.time);v6153U16(view,p+12,dt.date);v6153U32(view,p+14,e.crc);v6153U32(view,p+18,e.data.length);v6153U32(view,p+22,e.data.length);v6153U16(view,p+26,e.name.length);v6153U16(view,p+28,0);p+=30;out.set(e.name,p);p+=e.name.length;out.set(e.data,p);p+=e.data.length;
+  }
+  const centralOffset=p;
+  for(const e of entries){
+    v6153U32(view,p,0x02014b50);v6153U16(view,p+4,20);v6153U16(view,p+6,20);v6153U16(view,p+8,0x0800);v6153U16(view,p+10,0);v6153U16(view,p+12,dt.time);v6153U16(view,p+14,dt.date);v6153U32(view,p+16,e.crc);v6153U32(view,p+20,e.data.length);v6153U32(view,p+24,e.data.length);v6153U16(view,p+28,e.name.length);v6153U16(view,p+30,0);v6153U16(view,p+32,0);v6153U16(view,p+34,0);v6153U16(view,p+36,0);v6153U32(view,p+38,0);v6153U32(view,p+42,e.offset);p+=46;out.set(e.name,p);p+=e.name.length;
+  }
+  const centralSize=p-centralOffset;v6153U32(view,p,0x06054b50);v6153U16(view,p+4,0);v6153U16(view,p+6,0);v6153U16(view,p+8,entries.length);v6153U16(view,p+10,entries.length);v6153U32(view,p+12,centralSize);v6153U32(view,p+16,centralOffset);v6153U16(view,p+20,0);return out;
+}
+function v6153InlineCell(ref,value,style=4){
+  const s=String(value??'');return `<c r="${ref}" t="inlineStr" s="${style}"><is><t xml:space="preserve">${v6153XmlEscape(s)}</t></is></c>`;
+}
+function v6153StudentNameWithoutFamily(st){
+  const full=v611CleanName(st?.full_name||''),family=v611CleanName(st?.family_name||'');
+  if(!family)return full;
+  const f=full.toLocaleLowerCase('ar'),k=family.toLocaleLowerCase('ar');
+  if(f===k)return full;
+  return f.endsWith(' '+k)?full.slice(0,Math.max(0,full.length-family.length)).trim():full;
+}
+function v6153RoomWorkbookBytes(room,students){
+  const school=state.data?.settings?.school_name||'مدرسة منارة العلم الخاصة';
+  const academic=state.data?.settings?.academic_year||'';
+  const roomTitle=`${room?.grade||''}${room?.section_label?` — ${room.section_label}`:''}`.trim()||room?.name||'الشعبة';
+  // RTL column order follows the Arabic template: column A appears at the far right in Arabic Excel.
+  // Keep only the fields requested by administration and avoid duplicate section/location/status fields.
+  const headers=['اسم الطالب','الكنية','اسم الأب','اسم الأم','اسم الجد','مواليد','العنوان','الملاحظات','رقم هاتف ولي الأمر','الجنس','رقم السيارة','الصف / الشعبة','كود الطالب'];
+  const sorted=(students||[]).slice().sort((a,b)=>String(v612StudentDisplayName(a)||'').localeCompare(String(v612StudentDisplayName(b)||''),'ar',{sensitivity:'base',numeric:true}));
+  const columns=[24,16,18,18,18,13,28,46,20,10,13,24,20];
+  const rows=[];
+  rows.push(`<row r="1" ht="28" customHeight="1">${v6153InlineCell('A1',school,1)}</row>`);
+  rows.push(`<row r="2" ht="24" customHeight="1">${v6153InlineCell('A2',`${roomTitle}  |  عدد الطلاب: ${sorted.length}${academic?`  |  العام الدراسي: ${academic}`:''}`,2)}</row>`);
+  rows.push(`<row r="3" ht="8" customHeight="1"></row>`);
+  rows.push(`<row r="4" ht="32" customHeight="1">${headers.map((h,i)=>v6153InlineCell(v6153ColName(i)+'4',h,3)).join('')}</row>`);
+  sorted.forEach((st,idx)=>{
+    const gradeSection=[st.grade||room?.grade||'',st.class_name||room?.section_label||''].filter(Boolean).join(' — ');
+    const vals=[
+      v6153StudentNameWithoutFamily(st),st.family_name||'',st.father_name||'',st.mother_name||'',st.grandfather_name||'',st.date_of_birth||'',st.address||'',st.notes||'',st.parent_phone||'',st.gender||'',st.transport_car_number||'',gradeSection,st.access_code||''
+    ];
+    const r=idx+5;rows.push(`<row r="${r}" ht="${String(st.notes||'').trim()?38:24}" customHeight="1">${vals.map((v,i)=>v6153InlineCell(v6153ColName(i)+r,v,i===7?5:4)).join('')}</row>`);
+  });
+  if(!sorted.length)rows.push(`<row r="5" ht="26" customHeight="1">${v6153InlineCell('A5','لا يوجد طلاب مسجلون في هذه الشعبة',4)}</row>`);
+  const endRow=Math.max(5,sorted.length+4),lastCol=v6153ColName(headers.length-1);
+  const colsXml=columns.map((w,i)=>`<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`).join('');
+  const sheet=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>
+  <dimension ref="A1:${lastCol}${endRow}"/>
+  <sheetViews><sheetView rightToLeft="1" workbookViewId="0"><pane ySplit="4" topLeftCell="A5" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
+  <sheetFormatPr defaultRowHeight="21"/>
+  <cols>${colsXml}</cols>
+  <sheetData>${rows.join('')}</sheetData>
+  <autoFilter ref="A4:${lastCol}${endRow}"/>
+  <mergeCells count="2"><mergeCell ref="A1:${lastCol}1"/><mergeCell ref="A2:${lastCol}2"/></mergeCells>
+  <printOptions horizontalCentered="1" gridLines="0"/>
+  <pageMargins left="0.25" right="0.25" top="0.45" bottom="0.45" header="0.2" footer="0.2"/>
+  <pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/>
+  <headerFooter><oddHeader>&amp;C${v6153XmlEscape(roomTitle)}</oddHeader><oddFooter>&amp;Cصفحة &amp;P من &amp;N</oddFooter></headerFooter>
+</worksheet>`;
+  const styles=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+ <fonts count="5">
+  <font><sz val="11"/><name val="Calibri"/><family val="2"/></font>
+  <font><b/><color rgb="FFFFFFFF"/><sz val="16"/><name val="Calibri"/></font>
+  <font><b/><color rgb="FF0B6B3A"/><sz val="12"/><name val="Calibri"/></font>
+  <font><b/><color rgb="FF000000"/><sz val="11"/><name val="Calibri"/></font>
+  <font><sz val="10"/><name val="Calibri"/></font>
+ </fonts>
+ <fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF0B6B3A"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFD9EAD3"/><bgColor indexed="64"/></patternFill></fill></fills>
+ <borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FF808080"/></left><right style="thin"><color rgb="FF808080"/></right><top style="thin"><color rgb="FF808080"/></top><bottom style="thin"><color rgb="FF808080"/></bottom><diagonal/></border></borders>
+ <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+ <cellXfs count="6">
+  <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+  <xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="center" vertical="center" readingOrder="2"/></xf>
+  <xf numFmtId="0" fontId="2" fillId="3" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="center" vertical="center" readingOrder="2"/></xf>
+  <xf numFmtId="0" fontId="3" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1" readingOrder="2"/></xf>
+  <xf numFmtId="0" fontId="4" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1" readingOrder="2"/></xf>
+  <xf numFmtId="0" fontId="4" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="top" wrapText="1" readingOrder="2"/></xf>
+ </cellXfs>
+ <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>`;
+  const workbook=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+ <workbookPr/><bookViews><workbookView xWindow="0" yWindow="0" windowWidth="24000" windowHeight="12000"/></bookViews>
+ <sheets><sheet name="طلاب الشعبة" sheetId="1" r:id="rId1"/></sheets>
+ <definedNames><definedName name="_xlnm.Print_Titles" localSheetId="0">'طلاب الشعبة'!$1:$4</definedName><definedName name="_xlnm.Print_Area" localSheetId="0">'طلاب الشعبة'!$A$1:$${lastCol}$${endRow}</definedName></definedNames>
+ <calcPr calcId="0" fullCalcOnLoad="1"/></workbook>`;
+  const workbookRels=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
+  const rootRels=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>`;
+  const contentTypes=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`;
+  const now=new Date().toISOString();
+  const core=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>${v6153XmlEscape(roomTitle)}</dc:title><dc:creator>${v6153XmlEscape(school)}</dc:creator><cp:lastModifiedBy>${v6153XmlEscape(school)}</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`;
+  const app=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>Manara School App</Application><AppVersion>6.15.3</AppVersion></Properties>`;
+  return v6153ZipStore([
+    {name:'[Content_Types].xml',data:contentTypes},{name:'_rels/.rels',data:rootRels},{name:'docProps/core.xml',data:core},{name:'docProps/app.xml',data:app},{name:'xl/workbook.xml',data:workbook},{name:'xl/_rels/workbook.xml.rels',data:workbookRels},{name:'xl/styles.xml',data:styles},{name:'xl/worksheets/sheet1.xml',data:sheet}
+  ]);
+}
+function v6153BytesBase64(bytes){
+  let out='';const step=0x8000;for(let i=0;i<bytes.length;i+=step){const part=bytes.subarray(i,Math.min(i+step,bytes.length));out+=String.fromCharCode.apply(null,part);}return btoa(out);
+}
+function v6153DownloadBytes(bytes,filename){
+  if(isAndroidApp()&&window.ManaraAndroid&&typeof window.ManaraAndroid.saveBase64File==='function'){
+    try{window.ManaraAndroid.saveBase64File(v6153BytesBase64(bytes),filename,V6153_XLSX_MIME);return;}catch(e){alert('تعذر فتح نافذة حفظ ملف Excel.');return;}
+  }
+  try{const blob=new Blob([bytes],{type:V6153_XLSX_MIME}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),3000);}catch(e){alert('تعذر تنزيل ملف Excel على هذا الجهاز.');}
+}
+function v6153ExportRoomExcel(roomId){
+  if(state.role!=='admin'){alert('تصدير Excel متاح للإدارة فقط.');return;}
+  const room=(state.data.rooms||[]).find(r=>String(r.id)===String(roomId));if(!room){alert('تعذر العثور على الشعبة.');return;}
+  const students=v610StudentsInRoom(roomId);const title=`${room.grade||''}${room.section_label?`-${room.section_label}`:''}`.trim()||room.name||'شعبة';
+  try{const bytes=v6153RoomWorkbookBytes(room,students);v6153DownloadBytes(bytes,`طلاب-${v6153FilePart(title)}.xlsx`);}catch(e){console.error(e);alert('تعذر إنشاء ملف Excel: '+(e?.message||e));}
+}
+window.onManaraFileSaved=function(name){alert(`تم حفظ ملف Excel بنجاح${name?`\n${name}`:''}`);};
+window.onManaraFileSaveError=function(message){if(message&&message!=='cancelled')alert(message||'تعذر حفظ ملف Excel.');};
+
+function page_buildings(){
+  if(!['admin','teacher'].includes(state.role))return noAccess();
+  const rooms=v610VisibleRooms(),groups=[];
+  for(const r of rooms){const g=String(r.grade||'غير محدد');let group=groups.find(x=>x.grade===g);if(!group){group={grade:g,rooms:[]};groups.push(group);}group.rooms.push(r);}
+  const content=groups.map(g=>`<div class="section"><div class="row between" style="margin-bottom:10px"><h3 class="section-title" style="margin:0">${esc(g.grade)}</h3><span class="badge active">${g.rooms.reduce((n,r)=>n+v610StudentsInRoom(r.id).length,0)} طالب</span></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(235px,1fr));gap:14px">${g.rooms.map(r=>{const students=v610StudentsInRoom(r.id),building=v610RoomBuildingName(r),teachers=v68TeacherNamesForRoom(r.id);return `<div class="card" style="position:relative;border:1px solid #dfe8e2;overflow:hidden"><button onclick="openClassFolder('${r.id}')" style="width:100%;border:0;background:transparent;text-align:right;padding:0;cursor:pointer;color:inherit"><div style="display:flex;align-items:center;gap:12px"><div style="font-size:42px;line-height:1">📁</div><div style="min-width:0"><b style="font-size:17px;display:block">${esc(r.grade||'—')} — ${esc(r.section_label||r.name||'شعبة')}</b><div class="muted" style="margin-top:4px">${esc(building||'')} ${building?'• ':''}${students.length} طالب</div></div></div><div class="hint" style="margin-top:12px">اضغط لفتح المجلد ومشاهدة الطلاب ومعلوماتهم</div></button>${teachers.length?`<div style="margin-top:10px">${teachers.map(n=>`<span class="badge teacher" style="margin:2px">${esc(n)}</span>`).join('')}</div>`:''}${state.role==='admin'?`<div class="row" style="margin-top:12px;gap:7px;flex-wrap:wrap"><button class="btn small" onclick="v6153ExportRoomExcel('${r.id}')">⬇ تصدير Excel</button><button class="btn small secondary" onclick="openRoomModal('${r.id}')">تعديل</button><button class="btn small danger" onclick="deleteRoom('${r.id}')">حذف الصف / الشعبة</button></div>`:''}</div>`}).join('')}</div></div>`).join('');
+  return `<div class="toolbar"><div><h2 class="section-title">الصفوف والشعب</h2><div class="muted">${state.role==='admin'?'يمكن تصدير كل شعبة إلى ملف Excel احترافي جاهز للطباعة بالعرض، مع جميع معلومات الطلاب مرتبة أبجدياً.':'تظهر لك فقط الشعب المخصصة لحسابك.'}</div></div>${state.role==='admin'?'<button class="btn" onclick="openRoomModal()">+ إضافة صف / شعبة</button>':''}</div>${state.role==='teacher'?`<div class="role-note">تظهر لك فقط الشعب المخصصة لحسابك: <b>${assignedRoomsLabel(state.user.id)}</b></div>`:''}${content||'<div class="card empty">لا توجد صفوف أو شعب متاحة.</div>'}`;
 }
