@@ -7,8 +7,8 @@ const LOGIN_REMEMBER_KEY = 'almanara_login_remember';
 const PARENT_CODE_KEY = 'manara_parent_saved_code';
 const FCM_TOKEN_KEY = 'manara_fcm_token';
 const PUBLIC_PARENT_PORTAL_URL = 'https://abdoali07979-collab.github.io/manara-school/';
-const APP_VERSION_CODE = 23;
-const APP_VERSION_LABEL = '6.15.4';
+const APP_VERSION_CODE = 25;
+const APP_VERSION_LABEL = '6.15.6';
 const UPDATE_CACHE_KEY = 'manara_android_update_config_v1';
 let sb = null;
 let state = { screen:'parent', user:null, role:null, tab:'home', portal:null, data:null, sidebar:false, loginNotice:'', portalPoll:null, pendingAuthUser:null, pendingAuthProfile:null, mfaEnroll:null };
@@ -269,6 +269,15 @@ function toggleSidebar(force){
   document.querySelector('.drawer-backdrop')?.classList.toggle('show',state.sidebar);
 }
 function isAndroidApp(){return /ManaraAndroidApp/i.test(navigator.userAgent||'');}
+function currentAppVersionCode(){
+  if(isAndroidApp()){
+    try{
+      const nativeCode=Number(window.ManaraAndroid?.getAppVersionCode?.());
+      if(Number.isFinite(nativeCode)&&nativeCode>0)return nativeCode;
+    }catch(_){}
+  }
+  return APP_VERSION_CODE;
+}
 function cachedUpdateConfig(){try{return JSON.parse(localStorage.getItem(UPDATE_CACHE_KEY)||'null');}catch(_){return null;}}
 function saveUpdateConfig(v){try{localStorage.setItem(UPDATE_CACHE_KEY,JSON.stringify(v||{}));}catch(_){}}
 function mandatoryUpdateHtml(cfg={}){
@@ -296,7 +305,7 @@ async function enforceMandatoryAndroidUpdate(){
   }catch(_){}
   const min=Number(cfg?.minimum_version_code||0);
   const forced=cfg?.force_update!==false;
-  if(forced && min>APP_VERSION_CODE){document.getElementById('app').innerHTML=mandatoryUpdateHtml(cfg);return false;}
+  if(forced && min>currentAppVersionCode()){document.getElementById('app').innerHTML=mandatoryUpdateHtml(cfg);return false;}
   return true;
 }
 if(isAndroidApp()) document.documentElement.classList.add('android-native');
@@ -1809,7 +1818,7 @@ async function v614ScopedUpdateConfig(scope){
 async function v614CheckScopedUpdate(scope){
   const cfg=await v614ScopedUpdateConfig(scope);if(!cfg)return true;
   const isParent=scope==='parent',min=Number(isParent?cfg.parent_minimum_version_code:cfg.staff_minimum_version_code)||0,forced=(isParent?cfg.parent_force_update:cfg.staff_force_update)!==false;
-  if(forced&&min>APP_VERSION_CODE){
+  if(forced&&min>currentAppVersionCode()){
     state.updateScope=scope;state.updateConfig={...cfg,latest_version_name:(isParent?cfg.parent_latest_version_name:cfg.staff_latest_version_name)||'الإصدار الجديد'};state.screen='scoped-update';render();return false;
   }
   return true;
