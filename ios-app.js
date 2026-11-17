@@ -7,8 +7,8 @@ const LOGIN_REMEMBER_KEY = 'almanara_login_remember';
 const PARENT_CODE_KEY = 'manara_parent_saved_code';
 const FCM_TOKEN_KEY = 'manara_fcm_token';
 const PUBLIC_PARENT_PORTAL_URL = 'https://abdoali07979-collab.github.io/manara-school/';
-const APP_VERSION_CODE = 22;
-const APP_VERSION_LABEL = '6.15.3';
+const APP_VERSION_CODE = 23;
+const APP_VERSION_LABEL = '6.15.4';
 const UPDATE_CACHE_KEY = 'manara_android_update_config_v1';
 let sb = null;
 let state = { screen:'parent', user:null, role:null, tab:'home', portal:null, data:null, sidebar:false, loginNotice:'', portalPoll:null, pendingAuthUser:null, pendingAuthProfile:null, mfaEnroll:null };
@@ -520,7 +520,7 @@ async function loadSupabaseData(){
     const [st,at,gr,an,su,pr,se,au,bu,fl,ro,sn,pn,ta]=await Promise.all([
       sb.from('students').select('*,rooms(id,code,name,grade,section_label,floor_id,floors(name,building_id,buildings(name)))').order('created_at',{ascending:false}),
       sb.from('attendance').select('*').order('date',{ascending:false}).limit(2000),
-      sb.from('grades').select('*,grade_items(title,max_score,exam_date,subjects(name))').order('created_at',{ascending:false}).limit(2000),
+      sb.from('grades').select('*,grade_items(subject_id,title,max_score,exam_date,subjects(name))').order('created_at',{ascending:false}).limit(2000),
       sb.from('announcements').select('*').order('created_at',{ascending:false}),
       sb.from('subjects').select('*').order('name'),
       sb.from('profiles').select('id,full_name,role,active,created_at').eq('role','teacher').order('created_at',{ascending:false}),
@@ -534,12 +534,12 @@ async function loadSupabaseData(){
       sb.from('teacher_room_assignments').select('*')
     ]);
     const students=(st.data||[]).map(x=>({...x,room_name:x.rooms?.name,room_code:x.rooms?.code,floor_name:x.rooms?.floors?.name,building_name:x.rooms?.floors?.buildings?.name,location_label:x.rooms?`${x.rooms?.floors?.buildings?.name||''} / ${x.rooms?.name||''}`:''}));
-    state.data={students,attendance:at.data||[],grades:(gr.data||[]).map(x=>({...x,exam_name:x.grade_items?.title,max_score:x.grade_items?.max_score,date:x.grade_items?.exam_date,subject_name:x.grade_items?.subjects?.name})),announcements:an.data||[],subjects:su.data||[],teachers:pr.data||[],settings:se.data||{},audit:au.data||[],buildings:bu.data||[],floors:fl.data||[],rooms:ro.data||[],studentNotes:await hydrateNoteImages(sn.data||[]),notifications:pn.data||[],teacherAssignments:ta.data||[]};
+    state.data={students,attendance:at.data||[],grades:(gr.data||[]).map(x=>({...x,exam_name:x.grade_items?.title,max_score:x.grade_items?.max_score,date:x.grade_items?.exam_date,subject_id:x.grade_items?.subject_id,subject_name:x.grade_items?.subjects?.name})),announcements:an.data||[],subjects:su.data||[],teachers:pr.data||[],settings:se.data||{},audit:au.data||[],buildings:bu.data||[],floors:fl.data||[],rooms:ro.data||[],studentNotes:await hydrateNoteImages(sn.data||[]),notifications:pn.data||[],teacherAssignments:ta.data||[]};
   }else{
     const [st,at,gr,su,se,bu,fl,ro,sn,ta]=await Promise.all([
       sb.from('students').select('*,rooms(id,code,name,grade,section_label,floor_id,floors(name,building_id,buildings(name)))').order('created_at',{ascending:false}),
       sb.from('attendance').select('*').order('date',{ascending:false}).limit(2000),
-      sb.from('grades').select('*,grade_items(title,max_score,exam_date,subjects(name))').order('created_at',{ascending:false}).limit(2000),
+      sb.from('grades').select('*,grade_items(subject_id,title,max_score,exam_date,subjects(name))').order('created_at',{ascending:false}).limit(2000),
       sb.from('subjects').select('*').order('name'),
       sb.from('school_settings').select('*').limit(1).maybeSingle(),
       sb.from('buildings').select('*').order('code'),
@@ -554,7 +554,7 @@ async function loadSupabaseData(){
     const allowedStudentIds=new Set(students.map(x=>String(x.id)));
     const attendance=(at.data||[]).filter(x=>allowedStudentIds.has(String(x.student_id)));
     const teacherNotes=(sn.data||[]).filter(x=>allowedStudentIds.has(String(x.student_id)));
-    const grades=(gr.data||[]).filter(x=>allowedStudentIds.has(String(x.student_id))).map(x=>({...x,exam_name:x.grade_items?.title,max_score:x.grade_items?.max_score,date:x.grade_items?.exam_date,subject_name:x.grade_items?.subjects?.name}));
+    const grades=(gr.data||[]).filter(x=>allowedStudentIds.has(String(x.student_id))).map(x=>({...x,exam_name:x.grade_items?.title,max_score:x.grade_items?.max_score,date:x.grade_items?.exam_date,subject_id:x.grade_items?.subject_id,subject_name:x.grade_items?.subjects?.name}));
     state.data={students,attendance,grades,announcements:[],subjects:su.data||[],teachers:[],settings:se.data||{},audit:[],buildings:bu.data||[],floors:fl.data||[],rooms:ro.data||[],studentNotes:await hydrateNoteImages(teacherNotes),notifications:[],teacherAssignments};
   }
   state.data.students=(state.data.students||[]).map(st=>({...st,full_name:v611CombineStudentName(st.full_name,st.family_name)}));
@@ -986,7 +986,7 @@ async function loadSupabaseData(){
     const [st,at,gr,an,su,pr,se,au,bu,fl,ro,sn,pn,ta,yrs,yrrec,dash]=await Promise.all([
       sb.from('students').select('*,rooms(id,code,name,grade,section_label,floor_id,floors(name,building_id,buildings(name)))').order('created_at',{ascending:false}),
       sb.from('attendance').select('*').order('date',{ascending:false}).limit(5000),
-      sb.from('grades').select('*,grade_items(title,max_score,exam_date,academic_year,subjects(name))').order('created_at',{ascending:false}).limit(5000),
+      sb.from('grades').select('*,grade_items(subject_id,title,max_score,exam_date,academic_year,subjects(name))').order('created_at',{ascending:false}).limit(5000),
       sb.from('announcements').select('*').order('created_at',{ascending:false}),
       sb.from('subjects').select('*').order('name'),
       sb.from('profiles').select('id,full_name,role,active,created_at').eq('role','teacher').order('created_at',{ascending:false}),
@@ -1003,7 +1003,7 @@ async function loadSupabaseData(){
       sb.rpc('report_dashboard_stats',{p_date:today()})
     ]);
     const students=safe(st,[]).map(x=>({...x,room_name:x.rooms?.name,room_code:x.rooms?.code,floor_name:x.rooms?.floors?.name,building_name:x.rooms?.floors?.buildings?.name,location_label:x.rooms?`${x.rooms?.floors?.buildings?.name||''} / ${x.rooms?.name||''}`:''}));
-    state.data={students,attendance:safe(at,[]),grades:safe(gr,[]).map(x=>({...x,exam_name:x.grade_items?.title,max_score:x.grade_items?.max_score,date:x.grade_items?.exam_date,academic_year:x.grade_items?.academic_year,subject_name:x.grade_items?.subjects?.name})),announcements:safe(an,[]),subjects:safe(su,[]),teachers:safe(pr,[]),settings:safe(se,{}),audit:safe(au,[]),buildings:safe(bu,[]),floors:safe(fl,[]),rooms:safe(ro,[]),studentNotes:await hydrateNoteImages(safe(sn,[])),notifications:safe(pn,[]),teacherAssignments:safe(ta,[]),academicYears:safe(yrs,[]),studentYearRecords:safe(yrrec,[]),dashboardStats:safe(dash,null)};
+    state.data={students,attendance:safe(at,[]),grades:safe(gr,[]).map(x=>({...x,exam_name:x.grade_items?.title,max_score:x.grade_items?.max_score,date:x.grade_items?.exam_date,academic_year:x.grade_items?.academic_year,subject_id:x.grade_items?.subject_id,subject_name:x.grade_items?.subjects?.name})),announcements:safe(an,[]),subjects:safe(su,[]),teachers:safe(pr,[]),settings:safe(se,{}),audit:safe(au,[]),buildings:safe(bu,[]),floors:safe(fl,[]),rooms:safe(ro,[]),studentNotes:await hydrateNoteImages(safe(sn,[])),notifications:safe(pn,[]),teacherAssignments:safe(ta,[]),academicYears:safe(yrs,[]),studentYearRecords:safe(yrrec,[]),dashboardStats:safe(dash,null)};
   }else{
     const [st,at,se,bu,fl,ro,sn,ta,yrs]=await Promise.all([
       sb.from('students').select('*,rooms(id,code,name,grade,section_label,floor_id,floors(name,building_id,buildings(name)))').order('created_at',{ascending:false}),
@@ -1416,7 +1416,7 @@ function openNoteModal(studentId=''){
 function v612GradesTableHtml(q=''){
   q=String(q||'').trim().toLowerCase();const allowedIds=new Set((state.data.students||[]).map(s=>String(s.id)));
   const rows=(state.data.grades||[]).filter(g=>state.role==='admin'||allowedIds.has(String(g.student_id))).filter(g=>!q||studentName(g.student_id).toLowerCase().includes(q));
-  return `<div class="table-wrap"><table><thead><tr><th>الطالب</th><th>المادة</th><th>الاختبار</th><th>التاريخ</th><th>العلامة</th><th>إجراء</th></tr></thead><tbody>${rows.map(g=>{const canDelete=state.role==='admin'||String(g.created_by||'')===String(state.user?.id||'');return `<tr><td><b>${esc(studentName(g.student_id))}</b></td><td>${esc(g.subject_name||g.subject||'')}</td><td>${esc(g.exam_name||g.exam||'')}</td><td>${esc(g.date||'—')}</td><td><b>${esc(g.score)}/${esc(g.max_score||g.max||100)}</b></td><td>${canDelete?`<button class="btn small danger" onclick="deleteGrade('${g.id}')">حذف</button>`:'—'}</td></tr>`}).join('')||'<tr><td colspan="6" class="empty">لا توجد نتائج مطابقة</td></tr>'}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>الطالب</th><th>المادة</th><th>الاختبار</th><th>التاريخ</th><th>العلامة</th><th>إجراء</th></tr></thead><tbody>${rows.map(g=>{const canManage=state.role==='admin'||String(g.created_by||'')===String(state.user?.id||'');return `<tr><td><b>${esc(studentName(g.student_id))}</b></td><td>${esc(g.subject_name||g.subject||'')}</td><td>${esc(g.exam_name||g.exam||'')}</td><td>${esc(g.date||'—')}</td><td><b>${esc(g.score)}/${esc(g.max_score||g.max||100)}</b></td><td>${canManage?`<div class="row" style="gap:6px;flex-wrap:wrap"><button class="btn small secondary" onclick="openEditGradeModal('${g.id}')">تعديل</button><button class="btn small danger" onclick="deleteGrade('${g.id}')">حذف</button></div>`:'—'}</td></tr>`}).join('')||'<tr><td colspan="6" class="empty">لا توجد نتائج مطابقة</td></tr>'}</tbody></table></div>`;
 }
 function filterGradeTable(){const box=document.getElementById('gradeTable');if(box)box.innerHTML=v612GradesTableHtml(document.getElementById('gradeSearch')?.value||'');applyMobileUi();}
 function page_grades(){
@@ -1451,6 +1451,42 @@ async function deleteGrade(id){
   const {error}=await sb.from('grades').delete().eq('id',id);if(error)return alert(authErrorArabic(error.message));await loadSupabaseData();render();
 }
 
+
+/* MANARA V6.15.5 — edit an existing result without deleting/re-adding it. */
+function openEditGradeModal(id){
+  const g=(state.data.grades||[]).find(x=>String(x.id)===String(id));if(!g)return alert('تعذر العثور على النتيجة.');
+  const canManage=state.role==='admin'||String(g.created_by||'')===String(state.user?.id||'');
+  if(!canManage){alert('يمكنك تعديل النتائج التي سجلتها أنت فقط.');return;}
+  const students=v612SortedStudents(state.data.students||[]),subjects=(state.data.subjects||[]).slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'ar'));
+  const currentSubjectId=String(g.subject_id||subjects.find(s=>String(s.name||'')===String(g.subject_name||''))?.id||'');
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="modal"><div class="modalbox" style="max-width:720px"><div class="row between"><div><h2 class="section-title">تعديل النتيجة</h2><div class="muted">عدّل النتيجة نفسها بدون حذفها أو إعادة إضافتها. تاريخ النتيجة الأصلي يبقى محفوظاً كما هو.</div></div><button class="btn outline" onclick="closeModal()">إغلاق</button></div><div id="modalMsg"></div><div class="mini-grid section"><div class="field"><label>الطالب *</label><select id="eg_student">${students.map(s=>`<option value="${s.id}" ${String(s.id)===String(g.student_id)?'selected':''}>${esc(v612StudentDisplayName(s))}</option>`).join('')}</select></div><div class="field"><label>المادة *</label><select id="eg_subject">${subjects.map(s=>`<option value="${s.id}" ${String(s.id)===currentSubjectId?'selected':''}>${esc(s.name)}</option>`).join('')}</select></div><div class="field"><label>اسم الاختبار *</label><input id="eg_exam" value="${esc(g.exam_name||g.exam||'')}"></div><div class="field"><label>العلامة *</label><input id="eg_score" type="number" min="0" step="0.01" value="${esc(g.score)}"></div><div class="field"><label>العلامة الكاملة *</label><input id="eg_max" type="number" min="0.01" step="0.01" value="${esc(g.max_score||g.max||100)}"></div></div><div class="message ok">✓ لن يتم إنشاء نتيجة جديدة ولن تُحذف النتيجة الحالية.</div><button class="btn" style="width:100%;margin-top:12px" onclick="saveEditedGrade('${g.id}')">حفظ التعديل</button></div></div>`);
+}
+async function saveEditedGrade(id){
+  const g=(state.data.grades||[]).find(x=>String(x.id)===String(id)),msg=document.getElementById('modalMsg');if(!g)return;
+  const canManage=state.role==='admin'||String(g.created_by||'')===String(state.user?.id||'');if(!canManage){if(msg)msg.innerHTML='<div class="message error">لا تملك صلاحية تعديل هذه النتيجة.</div>';return;}
+  const student_id=document.getElementById('eg_student')?.value,subjectId=document.getElementById('eg_subject')?.value,exam=document.getElementById('eg_exam')?.value.trim(),scoreRaw=document.getElementById('eg_score')?.value,maxRaw=document.getElementById('eg_max')?.value,score=Number(scoreRaw),max=Number(maxRaw);
+  const allowedIds=new Set((state.data.students||[]).map(s=>String(s.id)));
+  if(!student_id||!subjectId||!exam||scoreRaw===''||maxRaw===''||Number.isNaN(score)||Number.isNaN(max)||score<0||max<=0||score>max){if(msg)msg.innerHTML='<div class="message error">أكمل البيانات وتأكد أن العلامة بين 0 والعلامة الكاملة.</div>';return;}
+  if(state.role==='teacher'&&!allowedIds.has(String(student_id))){if(msg)msg.innerHTML='<div class="message error">هذا الطالب ليس ضمن الشعب المخصصة لك.</div>';return;}
+  if(msg)msg.innerHTML='<div class="message">جاري حفظ التعديل...</div>';
+  const old={student_id:g.student_id,score:g.score,subject_id:g.subject_id,exam_name:g.exam_name,max_score:g.max_score};
+  try{
+    if(DEMO){
+      const subject=state.data.subjects.find(s=>String(s.id)===String(subjectId))?.name||'';
+      Object.assign(g,{student_id,subject_id:subjectId,subject_name:subject,exam_name:exam,score,max_score:max});audit('تعديل','نتيجة',`${studentName(student_id)} / ${subject}`);saveDemo();
+    }else{
+      if(!g.grade_item_id)throw new Error('تعذر تحديد سجل الاختبار المرتبط بهذه النتيجة.');
+      const {error:e1}=await sb.from('grade_items').update({subject_id:subjectId,title:exam,max_score:max}).eq('id',g.grade_item_id);if(e1)throw e1;
+      const {error:e2}=await sb.from('grades').update({student_id,score}).eq('id',id);if(e2){
+        try{await sb.from('grade_items').update({subject_id:old.subject_id,title:old.exam_name,max_score:old.max_score}).eq('id',g.grade_item_id);}catch(_){}
+        throw e2;
+      }
+      await loadSupabaseData();
+    }
+    closeModal();render();setTimeout(()=>alert('تم تعديل النتيجة بنجاح.'),60);
+  }catch(e){if(msg)msg.innerHTML=`<div class="message error">${esc(authErrorArabic(e.message))}</div>`;}
+}
+
 /* ============================================================
    MANARA V6.12 FIX 1 — exact requested UX fixes
    - WhatsApp visible from students list
@@ -1469,7 +1505,7 @@ async function loadSupabaseData(){
     const [st,at,gr,an,su,pr,se,au,bu,fl,ro,sn,pn,ta,yrs,yrrec,dash]=await Promise.all([
       sb.from('students').select('*,rooms(id,code,name,grade,section_label,floor_id,floors(name,building_id,buildings(name)))').order('created_at',{ascending:false}),
       sb.from('attendance').select('*').order('date',{ascending:false}).limit(5000),
-      sb.from('grades').select('*,grade_items(title,max_score,exam_date,academic_year,subjects(name))').order('created_at',{ascending:false}).limit(5000),
+      sb.from('grades').select('*,grade_items(subject_id,title,max_score,exam_date,academic_year,subjects(name))').order('created_at',{ascending:false}).limit(5000),
       sb.from('announcements').select('*').order('created_at',{ascending:false}),
       sb.from('subjects').select('*').order('name'),
       sb.from('profiles').select('id,full_name,role,active,created_at').eq('role','teacher').order('created_at',{ascending:false}),
@@ -1486,12 +1522,12 @@ async function loadSupabaseData(){
       sb.rpc('report_dashboard_stats',{p_date:today()})
     ]);
     const students=v612SortedStudents(safe(st,[]).map(x=>({...x,full_name:v611CombineStudentName(x.full_name,x.family_name),room_name:x.rooms?.name,room_code:x.rooms?.code,floor_name:x.rooms?.floors?.name,building_name:x.rooms?.floors?.buildings?.name,location_label:x.rooms?`${x.rooms?.floors?.buildings?.name||''} / ${x.rooms?.name||''}`:''})));
-    state.data={students,attendance:safe(at,[]),grades:safe(gr,[]).map(x=>({...x,exam_name:x.grade_items?.title,max_score:x.grade_items?.max_score,date:x.grade_items?.exam_date,academic_year:x.grade_items?.academic_year,subject_name:x.grade_items?.subjects?.name})),announcements:safe(an,[]),subjects:safe(su,[]),teachers:safe(pr,[]),settings:safe(se,{}),audit:safe(au,[]),buildings:safe(bu,[]),floors:safe(fl,[]),rooms:safe(ro,[]),studentNotes:await hydrateNoteImages(safe(sn,[])),notifications:safe(pn,[]),teacherAssignments:safe(ta,[]),academicYears:safe(yrs,[]),studentYearRecords:safe(yrrec,[]),dashboardStats:safe(dash,null)};
+    state.data={students,attendance:safe(at,[]),grades:safe(gr,[]).map(x=>({...x,exam_name:x.grade_items?.title,max_score:x.grade_items?.max_score,date:x.grade_items?.exam_date,academic_year:x.grade_items?.academic_year,subject_id:x.grade_items?.subject_id,subject_name:x.grade_items?.subjects?.name})),announcements:safe(an,[]),subjects:safe(su,[]),teachers:safe(pr,[]),settings:safe(se,{}),audit:safe(au,[]),buildings:safe(bu,[]),floors:safe(fl,[]),rooms:safe(ro,[]),studentNotes:await hydrateNoteImages(safe(sn,[])),notifications:safe(pn,[]),teacherAssignments:safe(ta,[]),academicYears:safe(yrs,[]),studentYearRecords:safe(yrrec,[]),dashboardStats:safe(dash,null)};
   }else{
     const [st,at,gr,su,se,bu,fl,ro,sn,ta,yrs]=await Promise.all([
       sb.from('students').select('*,rooms(id,code,name,grade,section_label,floor_id,floors(name,building_id,buildings(name)))').order('created_at',{ascending:false}),
       sb.from('attendance').select('*').order('date',{ascending:false}).limit(5000),
-      sb.from('grades').select('*,grade_items(title,max_score,exam_date,academic_year,subjects(name))').order('created_at',{ascending:false}).limit(5000),
+      sb.from('grades').select('*,grade_items(subject_id,title,max_score,exam_date,academic_year,subjects(name))').order('created_at',{ascending:false}).limit(5000),
       sb.from('subjects').select('*').order('name'),
       sb.from('school_settings').select('*').limit(1).maybeSingle(),
       sb.from('buildings').select('*').order('code'),
@@ -1506,7 +1542,7 @@ async function loadSupabaseData(){
     const allowedStudentIds=new Set(students.map(x=>String(x.id)));
     const attendance=safe(at,[]).filter(x=>allowedStudentIds.has(String(x.student_id)));
     const teacherNotes=safe(sn,[]).filter(x=>allowedStudentIds.has(String(x.student_id)));
-    const grades=safe(gr,[]).filter(x=>allowedStudentIds.has(String(x.student_id))).map(x=>({...x,exam_name:x.grade_items?.title,max_score:x.grade_items?.max_score,date:x.grade_items?.exam_date,academic_year:x.grade_items?.academic_year,subject_name:x.grade_items?.subjects?.name}));
+    const grades=safe(gr,[]).filter(x=>allowedStudentIds.has(String(x.student_id))).map(x=>({...x,exam_name:x.grade_items?.title,max_score:x.grade_items?.max_score,date:x.grade_items?.exam_date,academic_year:x.grade_items?.academic_year,subject_id:x.grade_items?.subject_id,subject_name:x.grade_items?.subjects?.name}));
     state.data={students,attendance,grades,announcements:[],subjects:safe(su,[]),teachers:[],settings:safe(se,{}),audit:[],buildings:safe(bu,[]),floors:safe(fl,[]),rooms:safe(ro,[]),studentNotes:await hydrateNoteImages(teacherNotes),notifications:[],teacherAssignments,academicYears:safe(yrs,[]),studentYearRecords:[],dashboardStats:null};
   }
 }
@@ -2103,7 +2139,7 @@ async function loadSupabaseData(){
     const [students,attendance,grades,notes,notifications,yearRecords,an,su,pr,se,au,bu,fl,ro,ta,yrs,dash]=await Promise.all([
       v6152FetchAll((from,to)=>sb.from('students').select(studentSelect).order('created_at',{ascending:false}).order('id',{ascending:false}).range(from,to)),
       v6152FetchAll((from,to)=>sb.from('attendance').select('*').order('date',{ascending:false}).order('id',{ascending:false}).range(from,to)),
-      v6152FetchAll((from,to)=>sb.from('grades').select('*,grade_items(title,max_score,exam_date,academic_year,subjects(name))').order('created_at',{ascending:false}).order('id',{ascending:false}).range(from,to)),
+      v6152FetchAll((from,to)=>sb.from('grades').select('*,grade_items(subject_id,title,max_score,exam_date,academic_year,subjects(name))').order('created_at',{ascending:false}).order('id',{ascending:false}).range(from,to)),
       v6152FetchAll((from,to)=>sb.from('student_notes').select('*').order('created_at',{ascending:false}).order('id',{ascending:false}).range(from,to)),
       v6152FetchAll((from,to)=>sb.from('parent_notifications').select('*').order('created_at',{ascending:false}).order('id',{ascending:false}).range(from,to)),
       v6152FetchAll((from,to)=>sb.from('student_year_records').select('*').order('student_name').order('id').range(from,to)),
@@ -2122,7 +2158,7 @@ async function loadSupabaseData(){
     state.data={
       students:v612SortedStudents((students||[]).map(v6152MapStudent)),
       attendance:attendance||[],
-      grades:(grades||[]).map(x=>({...x,exam_name:x.grade_items?.title,max_score:x.grade_items?.max_score,date:x.grade_items?.exam_date,academic_year:x.grade_items?.academic_year,subject_name:x.grade_items?.subjects?.name})),
+      grades:(grades||[]).map(x=>({...x,exam_name:x.grade_items?.title,max_score:x.grade_items?.max_score,date:x.grade_items?.exam_date,academic_year:x.grade_items?.academic_year,subject_id:x.grade_items?.subject_id,subject_name:x.grade_items?.subjects?.name})),
       announcements:safe(an,[]),subjects:safe(su,[]),teachers:safe(pr,[]),settings:safe(se,{}),audit:safe(au,[]),
       buildings:safe(bu,[]),floors:safe(fl,[]),rooms:safe(ro,[]),
       studentNotes:await hydrateNoteImages(notes||[]),notifications:notifications||[],teacherAssignments:safe(ta,[]),
@@ -2147,11 +2183,11 @@ async function loadSupabaseData(){
     const allowedStudentIds=new Set(students.map(x=>String(x.id)));
     const [attendanceAll,gradesAll,notesAll]=await Promise.all([
       v6152FetchAll((from,to)=>sb.from('attendance').select('*').order('date',{ascending:false}).order('id',{ascending:false}).range(from,to)),
-      v6152FetchAll((from,to)=>sb.from('grades').select('*,grade_items(title,max_score,exam_date,academic_year,subjects(name))').order('created_at',{ascending:false}).order('id',{ascending:false}).range(from,to)),
+      v6152FetchAll((from,to)=>sb.from('grades').select('*,grade_items(subject_id,title,max_score,exam_date,academic_year,subjects(name))').order('created_at',{ascending:false}).order('id',{ascending:false}).range(from,to)),
       v6152FetchAll((from,to)=>sb.from('student_notes').select('*').order('created_at',{ascending:false}).order('id',{ascending:false}).range(from,to))
     ]);
     const attendance=(attendanceAll||[]).filter(x=>allowedStudentIds.has(String(x.student_id)));
-    const grades=(gradesAll||[]).filter(x=>allowedStudentIds.has(String(x.student_id))).map(x=>({...x,exam_name:x.grade_items?.title,max_score:x.grade_items?.max_score,date:x.grade_items?.exam_date,academic_year:x.grade_items?.academic_year,subject_name:x.grade_items?.subjects?.name}));
+    const grades=(gradesAll||[]).filter(x=>allowedStudentIds.has(String(x.student_id))).map(x=>({...x,exam_name:x.grade_items?.title,max_score:x.grade_items?.max_score,date:x.grade_items?.exam_date,academic_year:x.grade_items?.academic_year,subject_id:x.grade_items?.subject_id,subject_name:x.grade_items?.subjects?.name}));
     const teacherNotes=(notesAll||[]).filter(x=>allowedStudentIds.has(String(x.student_id)));
     state.data={students,attendance,grades,announcements:[],subjects:safe(su,[]),teachers:[],settings:safe(se,{}),audit:[],buildings:safe(bu,[]),floors:safe(fl,[]),rooms:safe(ro,[]),studentNotes:await hydrateNoteImages(teacherNotes),notifications:[],teacherAssignments,academicYears:safe(yrs,[]),studentYearRecords:[],dashboardStats:null};
   }
@@ -2372,7 +2408,7 @@ function v6153RoomWorkbookBytes(room,students){
   const contentTypes=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`;
   const now=new Date().toISOString();
   const core=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>${v6153XmlEscape(roomTitle)}</dc:title><dc:creator>${v6153XmlEscape(school)}</dc:creator><cp:lastModifiedBy>${v6153XmlEscape(school)}</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`;
-  const app=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>Manara School App</Application><AppVersion>6.15.3</AppVersion></Properties>`;
+  const app=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>Manara School App</Application><AppVersion>6.15.4</AppVersion></Properties>`;
   return v6153ZipStore([
     {name:'[Content_Types].xml',data:contentTypes},{name:'_rels/.rels',data:rootRels},{name:'docProps/core.xml',data:core},{name:'docProps/app.xml',data:app},{name:'xl/workbook.xml',data:workbook},{name:'xl/_rels/workbook.xml.rels',data:workbookRels},{name:'xl/styles.xml',data:styles},{name:'xl/worksheets/sheet1.xml',data:sheet}
   ]);
@@ -2401,4 +2437,133 @@ function page_buildings(){
   for(const r of rooms){const g=String(r.grade||'غير محدد');let group=groups.find(x=>x.grade===g);if(!group){group={grade:g,rooms:[]};groups.push(group);}group.rooms.push(r);}
   const content=groups.map(g=>`<div class="section"><div class="row between" style="margin-bottom:10px"><h3 class="section-title" style="margin:0">${esc(g.grade)}</h3><span class="badge active">${g.rooms.reduce((n,r)=>n+v610StudentsInRoom(r.id).length,0)} طالب</span></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(235px,1fr));gap:14px">${g.rooms.map(r=>{const students=v610StudentsInRoom(r.id),building=v610RoomBuildingName(r),teachers=v68TeacherNamesForRoom(r.id);return `<div class="card" style="position:relative;border:1px solid #dfe8e2;overflow:hidden"><button onclick="openClassFolder('${r.id}')" style="width:100%;border:0;background:transparent;text-align:right;padding:0;cursor:pointer;color:inherit"><div style="display:flex;align-items:center;gap:12px"><div style="font-size:42px;line-height:1">📁</div><div style="min-width:0"><b style="font-size:17px;display:block">${esc(r.grade||'—')} — ${esc(r.section_label||r.name||'شعبة')}</b><div class="muted" style="margin-top:4px">${esc(building||'')} ${building?'• ':''}${students.length} طالب</div></div></div><div class="hint" style="margin-top:12px">اضغط لفتح المجلد ومشاهدة الطلاب ومعلوماتهم</div></button>${teachers.length?`<div style="margin-top:10px">${teachers.map(n=>`<span class="badge teacher" style="margin:2px">${esc(n)}</span>`).join('')}</div>`:''}${state.role==='admin'?`<div class="row" style="margin-top:12px;gap:7px;flex-wrap:wrap"><button class="btn small" onclick="v6153ExportRoomExcel('${r.id}')">⬇ تصدير Excel</button><button class="btn small secondary" onclick="openRoomModal('${r.id}')">تعديل</button><button class="btn small danger" onclick="deleteRoom('${r.id}')">حذف الصف / الشعبة</button></div>`:''}</div>`}).join('')}</div></div>`).join('');
   return `<div class="toolbar"><div><h2 class="section-title">الصفوف والشعب</h2><div class="muted">${state.role==='admin'?'يمكن تصدير كل شعبة إلى ملف Excel احترافي جاهز للطباعة بالعرض، مع جميع معلومات الطلاب مرتبة أبجدياً.':'تظهر لك فقط الشعب المخصصة لحسابك.'}</div></div>${state.role==='admin'?'<button class="btn" onclick="openRoomModal()">+ إضافة صف / شعبة</button>':''}</div>${state.role==='teacher'?`<div class="role-note">تظهر لك فقط الشعب المخصصة لحسابك: <b>${assignedRoomsLabel(state.user.id)}</b></div>`:''}${content||'<div class="card empty">لا توجد صفوف أو شعب متاحة.</div>'}`;
+}
+
+
+/* =========================================================
+   MANARA V6.15.4 — Login eye + multi-subject grades + durable notes archive + QR save fix
+   - Login password can be shown/hidden with an eye button.
+   - Result entry no longer asks for a date; the registration date is saved automatically.
+   - One student can receive results for multiple selected subjects in a single save.
+   - The former daily notes view is now a permanent notes archive; it never resets after 24h.
+   - QR saving is handled by the Android native save dialog (MainActivity V6.15.4).
+   ========================================================= */
+
+function toggleLoginPassword(){
+  const input=document.getElementById('loginPass'),btn=document.getElementById('loginPassEye');
+  if(!input)return;
+  const show=input.type==='password';
+  input.type=show?'text':'password';
+  if(btn){btn.textContent=show?'🙈':'👁';btn.setAttribute('aria-label',show?'إخفاء كلمة المرور':'إظهار كلمة المرور');btn.title=show?'إخفاء كلمة المرور':'إظهار كلمة المرور';}
+}
+function loginPage(){
+  const notice=state.loginNotice?`<div class="message ok">${esc(state.loginNotice)}</div>`:'';
+  state.loginNotice='';
+  const savedLogin=DEMO?'admin':(localStorage.getItem(LOGIN_EMAIL_KEY)||'');
+  const rememberLogin=localStorage.getItem(LOGIN_REMEMBER_KEY)!=='0';
+  return `<div class="public-page"><div class="public-shell" style="max-width:520px"><div class="auth-card" style="margin-top:6vh;text-align:center">${logo().replace('<img','<img style="width:100px;height:100px;border-radius:50%;object-fit:cover;margin-bottom:10px"')}<h2>دخول النظام</h2><p class="muted">للإدارة والمدرسين المصرح لهم فقط</p>
+  ${DEMO?'<div class="role-note">تجربة: الإدارة admin / Almanara@2026 — المدرس teacher1 / Teacher@2026</div>':''}
+  ${notice}<div id="loginMsg"></div>
+  <div class="field" style="text-align:right"><label>${DEMO?'اسم المستخدم':'البريد الإلكتروني'}</label><input id="loginUser" type="${DEMO?'text':'email'}" autocomplete="username" value="${esc(savedLogin)}"></div>
+  <div class="field" style="text-align:right"><label>كلمة المرور</label><div style="position:relative"><input id="loginPass" type="password" autocomplete="current-password" style="padding-left:52px" onkeydown="if(event.key==='Enter') doLogin()"><button id="loginPassEye" type="button" onclick="toggleLoginPassword()" aria-label="إظهار كلمة المرور" title="إظهار كلمة المرور" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);width:40px;height:40px;border:0;background:transparent;font-size:22px;cursor:pointer;border-radius:10px">👁</button></div></div>
+  ${!DEMO?`<label style="display:flex;align-items:center;gap:10px;justify-content:flex-start;margin:8px 0 14px;cursor:pointer;text-align:right"><input id="rememberLogin" type="checkbox" ${rememberLogin?'checked':''} style="width:20px;height:20px"><span><b>حفظ تسجيل الدخول على هذا الجهاز</b><br><span class="muted" style="font-size:13px">بعد أول دخول لن تحتاج لكتابة البريد وكلمة المرور كل مرة، إلا إذا ضغطت «تسجيل الخروج».</span></span></label>`:''}
+  <div class="row" style="justify-content:center;gap:8px"><button class="btn" onclick="doLogin()">دخول</button><button class="btn outline" onclick="goParent()">بوابة الأهل</button></div>${!DEMO?'<button class="link-button" onclick="forgotPassword()">نسيت كلمة المرور؟</button>':''}</div></div></div>`;
+}
+
+function v6154SubjectToggle(box){
+  const row=box?.closest?.('.v6154-grade-subject');if(!row)return;
+  row.querySelectorAll('input[type="number"]').forEach(i=>i.disabled=!box.checked);
+  row.style.opacity=box.checked?'1':'0.72';
+  if(box.checked){const score=row.querySelector('.v6154-score');if(score&&!score.value)setTimeout(()=>score.focus(),0);}
+}
+function v6154ToggleAllSubjects(checked){
+  document.querySelectorAll('.v6154-subject-check').forEach(cb=>{cb.checked=!!checked;v6154SubjectToggle(cb);});
+}
+function openGradeModal(){
+  const students=v612SortedStudents(state.data.students||[]);if(!students.length){alert('لا يوجد طلاب متاحون لحسابك.');return;}
+  const subjects=(state.data.subjects||[]).slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'ar'));
+  if(!subjects.length){alert('لا توجد مواد مسجلة في النظام.');return;}
+  const subjectRows=subjects.map(s=>`<div class="card v6154-grade-subject" data-subject-id="${esc(s.id)}" data-subject-name="${esc(s.name)}" style="padding:12px;margin:0;opacity:.72"><div class="row between" style="align-items:center;gap:10px;flex-wrap:wrap"><label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-weight:700"><input class="v6154-subject-check" type="checkbox" onchange="v6154SubjectToggle(this)" style="width:20px;height:20px">${esc(s.name)}</label><div class="row" style="gap:8px;flex-wrap:wrap"><div class="field" style="margin:0;min-width:120px"><label>العلامة</label><input class="v6154-score" type="number" min="0" step="0.01" disabled placeholder="0"></div><div class="field" style="margin:0;min-width:140px"><label>العلامة الكاملة</label><input class="v6154-max" type="number" min="0.01" step="0.01" value="100" disabled></div></div></div></div>`).join('');
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="modal"><div class="modalbox" style="max-width:820px"><div class="row between"><div><h2 class="section-title">إضافة نتائج متعددة</h2><div class="muted">اختر الطالب، ثم اختر مادة واحدة أو عدة مواد وأدخل العلامة لكل مادة. تاريخ التسجيل يُحفظ تلقائياً ولا يحتاج إدخالاً.</div></div><button class="btn outline" onclick="closeModal()">إغلاق</button></div><div id="modalMsg"></div><div class="mini-grid section"><div class="field"><label>الطالب *</label><select id="g_student">${students.map(s=>`<option value="${s.id}">${esc(v612StudentDisplayName(s))}</option>`).join('')}</select></div><div class="field"><label>اسم الاختبار *</label><input id="g_exam" placeholder="مثال: مذاكرة اللغة العربية"></div></div><div class="row between" style="margin:10px 0;gap:8px;flex-wrap:wrap"><div><b>المواد والعلامات</b><div class="hint">يمكن اختيار مادة واحدة أو أكثر وحفظها كلها مرة واحدة.</div></div><div class="row" style="gap:8px"><button class="btn small secondary" type="button" onclick="v6154ToggleAllSubjects(true)">تحديد الكل</button><button class="btn small outline" type="button" onclick="v6154ToggleAllSubjects(false)">إلغاء الكل</button></div></div><div style="display:grid;gap:10px;max-height:52vh;overflow:auto;padding:2px">${subjectRows}</div><div class="message ok" style="margin-top:12px">📅 التاريخ يُسجّل تلقائياً بتاريخ يوم الحفظ، بدون أي خانة تاريخ.</div><button class="btn" style="width:100%;margin-top:12px" onclick="saveGrade()">حفظ كل النتائج المحددة</button></div></div>`);
+}
+async function saveGrade(){
+  const student_id=document.getElementById('g_student')?.value,exam=document.getElementById('g_exam')?.value.trim(),msg=document.getElementById('modalMsg');
+  const allowedIds=new Set((state.data.students||[]).map(s=>String(s.id)));
+  if(!student_id||!exam){if(msg)msg.innerHTML='<div class="message error">اختر الطالب واكتب اسم الاختبار.</div>';return;}
+  if(state.role==='teacher'&&!allowedIds.has(String(student_id))){if(msg)msg.innerHTML='<div class="message error">هذا الطالب ليس ضمن الشعب المخصصة لك.</div>';return;}
+  const selected=[];
+  document.querySelectorAll('.v6154-grade-subject').forEach(row=>{
+    const check=row.querySelector('.v6154-subject-check');if(!check?.checked)return;
+    const subjectId=row.dataset.subjectId||'',subjectName=row.dataset.subjectName||'';
+    const scoreRaw=row.querySelector('.v6154-score')?.value,maxRaw=row.querySelector('.v6154-max')?.value;
+    const score=Number(scoreRaw),max=Number(maxRaw||100);
+    selected.push({subjectId,subjectName,score,max,scoreRaw,maxRaw});
+  });
+  if(!selected.length){if(msg)msg.innerHTML='<div class="message error">اختر مادة واحدة على الأقل.</div>';return;}
+  const bad=selected.find(x=>x.scoreRaw===''||Number.isNaN(x.score)||x.score<0||Number.isNaN(x.max)||x.max<=0||x.score>x.max);
+  if(bad){if(msg)msg.innerHTML=`<div class="message error">راجع علامة مادة <b>${esc(bad.subjectName||'المحددة')}</b>. يجب أن تكون بين 0 والعلامة الكاملة.</div>`;return;}
+  const date=today();
+  if(msg)msg.innerHTML=`<div class="message">جاري حفظ ${selected.length} نتيجة...</div>`;
+  let insertedItemIds=[];
+  try{
+    if(DEMO){
+      selected.forEach(x=>{state.data.grades.unshift({id:uid(),student_id,subject_id:x.subjectId,subject_name:x.subjectName,exam_name:exam,date,score:x.score,max_score:x.max,created_by:state.user?.id||'',created_at:new Date().toISOString()});audit('إضافة','نتيجة',`${studentName(student_id)} / ${x.subjectName}`);});
+      saveDemo();
+    }else{
+      const itemsPayload=selected.map(x=>({subject_id:x.subjectId,title:exam,max_score:x.max,exam_date:date,created_by:state.user.id}));
+      const {data:items,error:e1}=await sb.from('grade_items').insert(itemsPayload).select('id,subject_id');if(e1)throw e1;
+      insertedItemIds=(items||[]).map(x=>x.id).filter(Boolean);
+      if((items||[]).length!==selected.length)throw new Error('لم يتم إنشاء جميع بنود النتائج.');
+      const bySubject=new Map(selected.map(x=>[String(x.subjectId),x]));
+      const gradesPayload=(items||[]).map(item=>({student_id,grade_item_id:item.id,score:bySubject.get(String(item.subject_id))?.score,created_by:state.user.id}));
+      const {error:e2}=await sb.from('grades').insert(gradesPayload);if(e2)throw e2;
+      await loadSupabaseData();
+    }
+    closeModal();render();
+    setTimeout(()=>alert(`تم حفظ ${selected.length} نتيجة بنجاح.`),80);
+  }catch(e){
+    if(insertedItemIds.length&&!DEMO){try{await sb.from('grade_items').delete().in('id',insertedItemIds);}catch(_){}}
+    if(msg)msg.innerHTML=`<div class="message error">${esc(authErrorArabic(e.message))}</div>`;
+  }
+}
+
+function v6154ArchivedNotes(q=''){
+  const needle=v6152SearchKey(q),allowedIds=new Set((state.data.students||[]).map(s=>String(s.id)));
+  return (state.data.studentNotes||[])
+    .filter(n=>state.role==='admin'||allowedIds.has(String(n.student_id)))
+    .filter(n=>!needle||[studentName(n.student_id),n.title,n.content,n.category,n.importance,v6151LocalDateKey(n.created_at)].some(v=>v6152SearchKey(v).includes(needle)))
+    .slice().sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
+}
+function v6154NotesArchiveTableHtml(q=''){
+  const notes=v6154ArchivedNotes(q);
+  return `<div class="table-wrap"><table><thead><tr><th>التاريخ</th><th>الوقت</th><th>الطالب</th><th>الملاحظة</th><th>التصنيف</th><th>الأهمية</th><th>للأهل</th><th>الصورة</th></tr></thead><tbody>${notes.map(n=>`<tr><td><b>${esc(v6151LocalDateKey(n.created_at)||'—')}</b></td><td>${esc(v6151LocalTime(n.created_at))}</td><td><b>${esc(studentName(n.student_id))}</b></td><td><b>${esc(n.title||'ملاحظة')}</b><div class="muted" style="margin-top:4px;white-space:normal;min-width:220px">${esc(n.content||'')}</div></td><td>${esc(n.category||'ملاحظة عامة')}</td><td><span class="badge ${n.importance==='مهم'?'absent':'active'}">${esc(n.importance||'عادي')}</span></td><td>${n.visible_to_parent===false?'لا':'نعم ✓'}</td><td>${n.image_url?`<a href="${esc(n.image_url)}" target="_blank" rel="noopener">📷 عرض</a>`:'—'}</td></tr>`).join('')||'<tr><td colspan="8" class="empty">لا توجد ملاحظات مؤرشفة</td></tr>'}</tbody></table></div>`;
+}
+function filterArchivedNotes(){const box=document.getElementById('v6154NotesArchive');if(box)box.innerHTML=v6154NotesArchiveTableHtml(document.getElementById('v6154NotesArchiveSearch')?.value||'');applyMobileUi();}
+function page_dailynotes(){
+  if(!['admin','teacher'].includes(state.role))return noAccess();
+  const count=v6154ArchivedNotes().length;
+  return `<div class="toolbar"><div><h2 class="section-title">أرشيف الملاحظات</h2><div class="muted">كل الملاحظات محفوظة بالتاريخ والوقت ولا تختفي بعد 24 ساعة. تبقى في الأرشيف حتى يتم حذفها من صفحة إدارة الملاحظات.</div></div><div class="row"><span class="badge active">${count} ملاحظة محفوظة</span><button class="btn" onclick="openNoteModal()">+ ملاحظة جديدة</button><button class="btn secondary" onclick="setTab('notes')">إدارة الملاحظات</button></div></div><div class="message ok">✓ الأرشيف دائم: لا يبدأ فارغاً مع يوم جديد، وتستطيع الرجوع لأي ملاحظة قديمة في أي وقت.</div><div class="card section"><div class="toolbar"><div class="field search"><label>بحث في الأرشيف</label><input id="v6154NotesArchiveSearch" placeholder="اسم الطالب، عنوان الملاحظة، التاريخ..." oninput="filterArchivedNotes()"></div></div><div id="v6154NotesArchive">${v6154NotesArchiveTableHtml()}</div></div>`;
+}
+function navItems(){
+  if(state.role==='teacher') return [
+    ['home','⌂','الرئيسية'],['buildings','▦','الصفوف والشعب'],['students','♟','طلابي'],['attendance','×','تسجيل الغياب'],['dailyabsence','☷','غياب الأسبوع'],['dailynotes','✎','أرشيف الملاحظات'],['grades','▤','النتائج'],['reports','▥','الجرد الشهري'],['notes','≡','إدارة الملاحظات']
+  ];
+  return [
+    ['home','⌂','الرئيسية'],['buildings','▦','الصفوف والشعب'],['students','♟','الطلاب'],['attendance','×','تسجيل الغياب'],['dailyabsence','☷','غياب الأسبوع'],['dailynotes','✎','أرشيف الملاحظات'],['reports','▥','الجرد الشهري'],['archive','▧','الأرشيف السنوي'],['notes','≡','إدارة الملاحظات'],['grades','▤','النتائج'],['announcements','◉','الإعلانات'],['teachers','♙','المدرسون'],['audit','≡','سجل العمليات'],['settings','⚙','الإعدادات']
+  ];
+}
+function appPage(){
+  const labels={home:'الرئيسية',buildings:'الصفوف والشعب',students:'الطلاب',attendance:'تسجيل الغياب',dailyabsence:'غياب الأسبوع',dailynotes:'أرشيف الملاحظات',reports:'الجرد الشهري',archive:'الأرشيف السنوي',notes:'إدارة الملاحظات',grades:'النتائج',announcements:'الإعلانات',teachers:'إدارة المدرسين',audit:'سجل العمليات',settings:'الإعدادات'};
+  if(state.role==='teacher'&&!['home','buildings','students','attendance','dailyabsence','dailynotes','grades','reports','notes'].includes(state.tab))state.tab='home';
+  const topLogo=logo().replace('<img','<img class="top-logo"'),watermark=logo().replace('<img','<img class="content-watermark"');
+  return `<div class="app-shell"><aside class="sidebar ${state.sidebar?'open':''}"><div class="side-brand">${logo()}<div><b>${esc(state.data?.settings?.school_name||'مدرسة المنارة الخاصة')}</b><small>MANARA PRIVATE SCHOOL</small></div><button class="drawer-close" onclick="toggleSidebar(false)" aria-label="إغلاق">×</button></div><div class="user-card"><b>${esc(state.user?.name||'')}</b><small>${state.role==='admin'?'مدير النظام — تحكم كامل':'مدرس — طلاب + غياب + نتائج + ملاحظات ضمن الشعب المخصصة'}</small></div><div class="side-label">القائمة الرئيسية</div><nav class="side-nav">${navItems().map(n=>`<button class="${state.tab===n[0]?'active':''}" onclick="setTab('${n[0]}')"><i class="nav-icon">${n[1]}</i>${n[2]}</button>`).join('')}</nav><div class="side-label" style="margin-top:16px">الحساب</div><nav class="side-nav"><button onclick="goParent()"><i class="nav-icon">◫</i>معاينة بوابة الأهل</button><button onclick="logout()"><i class="nav-icon">↪</i>تسجيل الخروج</button></nav></aside><div class="drawer-backdrop ${state.sidebar?'show':''}" onclick="toggleSidebar(false)"></div><main class="main"><header class="topbar"><div class="row"><button class="btn outline mobile-menu" onclick="toggleSidebar()">☰</button><div class="page-title"><b>${labels[state.tab]||''}</b><small>${state.role==='admin'?'لوحة الإدارة الرئيسية':'طلابك وشعبك فقط'}</small></div></div>${topLogo}<div class="top-actions"><span class="badge ${state.role}">${state.role==='admin'?'الإدارة':'مدرس'}</span></div></header><section class="content">${watermark}${pageContent()}</section></main></div>`;
+}
+function page_home(){
+  const d=state.data||{},archivedNotes=v6154ArchivedNotes(),{start,end}=v6152WeekBounds(today());
+  const weekAbs=(d.attendance||[]).filter(x=>x.status==='غائب'&&String(x.date||'')>=start&&String(x.date||'')<=end);
+  if(state.role==='teacher'){
+    return `<div class="role-note">حسابك يبقى مسجلاً حتى تضغط «تسجيل الخروج». صلاحيتك محصورة بالشعب التي حددتها الإدارة.</div><div class="kpi-grid section"><div class="card kpi"><div><b>الطلاب المسموحون</b><strong>${d.students?.length||0}</strong></div><div class="kpi-icon">♟</div></div><div class="card kpi"><div><b>غياب الأسبوع</b><strong>${weekAbs.length}</strong></div><div class="kpi-icon">×</div></div><div class="card kpi"><div><b>الملاحظات المؤرشفة</b><strong>${archivedNotes.length}</strong></div><div class="kpi-icon">✎</div></div><div class="card kpi"><div><b>النتائج المسجلة</b><strong>${(d.grades||[]).length}</strong></div><div class="kpi-icon">▤</div></div></div><div class="two-col section"><div class="card"><div class="row between"><div><h3 class="section-title">غياب الأسبوع</h3><div class="muted">من ${esc(start)} إلى ${esc(end)}، ويتجدد تلقائياً كل أسبوع.</div></div><button class="btn" onclick="setTab('dailyabsence')">عرض غياب الأسبوع</button></div></div><div class="card"><div class="row between"><div><h3 class="section-title">أرشيف الملاحظات</h3><div class="muted">كل الملاحظات السابقة محفوظة ولا تختفي بعد 24 ساعة.</div></div><button class="btn secondary" onclick="setTab('dailynotes')">فتح الأرشيف</button></div></div></div><div class="card section"><div class="row between"><div><h3 class="section-title">الجرد الشهري</h3><div class="muted">يتضمن الغياب فقط، والملاحظات محفوظة في أرشيف مستقل.</div></div><button class="btn secondary" onclick="setTab('reports')">فتح الجرد</button></div></div>`;
+  }
+  const s=d.dashboardStats||{},unread=(d.notifications||[]).filter(n=>!n.seen_at).length;
+  return `<div class="kpi-grid"><div class="card kpi"><div><b>إجمالي الطلاب</b><strong>${moneyLike(d.students?.length||s.total_students||0)}</strong></div><div class="kpi-icon">♟</div></div><div class="card kpi"><div><b>غياب الأسبوع</b><strong>${moneyLike(weekAbs.length)}</strong></div><div class="kpi-icon">×</div></div><div class="card kpi"><div><b>الملاحظات المؤرشفة</b><strong>${moneyLike(archivedNotes.length)}</strong></div><div class="kpi-icon">✎</div></div><div class="card kpi"><div><b>إشعارات أهل غير مقروءة</b><strong>${moneyLike(unread)}</strong></div><div class="kpi-icon">🔔</div></div></div><div class="two-col section"><div class="card"><h3 class="section-title">المتابعة الأسبوعية</h3><div class="stack"><div class="row between"><span>حالات الغياب هذا الأسبوع</span><b>${moneyLike(weekAbs.length)}</b></div><div class="row between"><span>كل الملاحظات المحفوظة</span><b>${moneyLike(archivedNotes.length)}</b></div><button class="btn" onclick="setTab('dailyabsence')">غياب الأسبوع</button><button class="btn secondary" onclick="setTab('dailynotes')">أرشيف الملاحظات</button></div></div><div class="card"><h3 class="section-title">اختصارات</h3><div class="stack"><button class="btn" onclick="setTab('attendance')">تسجيل الغياب</button><button class="btn secondary" onclick="setTab('grades')">إضافة نتائج متعددة</button><button class="btn secondary" onclick="setTab('reports')">الجرد الشهري والمجاميع</button><button class="btn secondary" onclick="setTab('archive')">الأرشيف السنوي</button></div></div></div>`;
 }
